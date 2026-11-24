@@ -5,7 +5,9 @@ title: broadcastQueryClient (Experimental)
 
 > VERY IMPORTANT: This utility is currently in an experimental stage. This means that breaking changes will happen in minor AND patch releases. Use at your own risk. If you choose to rely on this in production in an experimental stage, please lock your version to a patch-level version to avoid unexpected breakages.
 
-`broadcastQueryClient` is a utility for broadcasting and syncing the state of your queryClient between browser tabs/windows with the same origin.
+`broadcastQueryClient` is a utility for keeping your queryClient in sync between browser tabs/windows with the same origin.
+
+Every page on the same origin can join a `BroadcastChannel` (or read its `localStorage` fallback), including pages that are not part of your app, so the channel name is not a secret. For that reason, query data, errors, and query keys are never sent. When a query is fetched or updated with `setQueryData` in one tab, other tabs are only told _which_ query changed (by a one-way digest of its hash). If they have that query cached, they invalidate it, and active queries refetch through their own `queryFn`. Queries removed with `removeQueries` while observed are removed in other tabs too.
 
 ## Installation
 
@@ -50,10 +52,8 @@ interface BroadcastQueryClientOptions {
   /** Options for the BroadcastChannel API */
   options?: BroadcastChannelOptions
   /**
-   * Called when a query event fails to broadcast to other tabs — most
-   * commonly because the query's data, error, or key contains a value the
-   * structured-clone algorithm cannot serialize (e.g. `ReadableStream`,
-   * `File`, functions, Vue `reactive` proxies).
+   * Called when a query event fails to broadcast to other tabs, for example
+   * because the underlying channel was closed.
    *
    * If omitted, a `console.warn` is emitted in development so failures
    * are never entirely silent. May return a `Promise`; any rejection is
@@ -66,7 +66,7 @@ interface BroadcastQueryClientOptions {
 }
 
 interface BroadcastErrorEvent {
-  type: 'updated' | 'removed' | 'added'
+  type: 'updated' | 'removed'
   queryHash: string
   queryKey: QueryKey
 }
@@ -82,7 +82,7 @@ The default options are:
 
 ## Handling broadcast errors
 
-If your cache can hold values that are not structured-cloneable — such as `ReadableStream` (from `Response.body`, streaming APIs, or AI SDKs), `File`, functions, or framework proxies like Vue `reactive` — the underlying `BroadcastChannel.postMessage` call will reject for that query. Cross-tab sync is skipped for that query; the rest of the cache continues to broadcast normally.
+If the underlying `BroadcastChannel.postMessage` call rejects for a query event, cross-tab sync is skipped for that event; the rest of the cache continues to broadcast normally.
 
 By default, a `console.warn` is emitted in development so failures are never silent. Provide `onBroadcastError` to route failures to your own error tracker:
 
