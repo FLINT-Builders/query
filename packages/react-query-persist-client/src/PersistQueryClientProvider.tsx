@@ -24,7 +24,9 @@ export const PersistQueryClientProvider = ({
 }: PersistQueryClientProviderProps): React.JSX.Element => {
   const [isRestoring, setIsRestoring] = React.useState(true)
   const refs = React.useRef({ persistOptions, onSuccess, onError })
-  const didRestore = React.useRef(false)
+  const restoredBuster = React.useRef<string | undefined>(undefined)
+  const restoreGeneration = React.useRef(0)
+  const buster = persistOptions.buster ?? ''
 
   React.useEffect(() => {
     refs.current = { persistOptions, onSuccess, onError }
@@ -35,17 +37,28 @@ export const PersistQueryClientProvider = ({
       ...refs.current.persistOptions,
       queryClient: props.client,
     }
-    if (!didRestore.current) {
-      didRestore.current = true
+    if (restoredBuster.current !== buster) {
+      if (restoredBuster.current !== undefined) {
+        props.client.clear()
+        setIsRestoring(true)
+      }
+      restoredBuster.current = buster
+      const generation = ++restoreGeneration.current
+      const isCurrent = () => generation === restoreGeneration.current
       persistQueryClientRestore(options)
-        .then(() => refs.current.onSuccess?.())
-        .catch(() => refs.current.onError?.())
-        .finally(() => {
-          setIsRestoring(false)
+        .then(() => {
+          if (isCurrent()) return refs.current.onSuccess?.()
         })
+        .catch(() => {
+          if (isCurrent()) return refs.current.onError?.()
+        })
+        .finally(() => {
+          if (isCurrent()) setIsRestoring(false)
+        })
+      return undefined
     }
     return isRestoring ? undefined : persistQueryClientSubscribe(options)
-  }, [props.client, isRestoring])
+  }, [props.client, isRestoring, buster])
 
   return (
     <QueryClientProvider {...props}>

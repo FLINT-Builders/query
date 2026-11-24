@@ -40,13 +40,28 @@
     return isRestoring.current ? () => {} : persistQueryClientSubscribe(options)
   })
 
+  let restoreGeneration = 0
+  let restoredBuster: string | undefined
+
   $effect(() => {
+    const currentOptions = options
+    const generation = ++restoreGeneration
+    const buster = currentOptions.buster ?? ''
+    if (restoredBuster !== undefined && restoredBuster !== buster) {
+      currentOptions.queryClient.clear()
+    }
+    restoredBuster = buster
+
     isRestoring.current = true
-    persistQueryClientRestore(options)
-      .then(() => props.onSuccess?.())
-      .catch(() => props.onError?.())
+    persistQueryClientRestore(currentOptions)
+      .then(() => {
+        if (generation === restoreGeneration) return props.onSuccess?.()
+      })
+      .catch(() => {
+        if (generation === restoreGeneration) return props.onError?.()
+      })
       .finally(() => {
-        isRestoring.current = false
+        if (generation === restoreGeneration) isRestoring.current = false
       })
   })
 </script>
