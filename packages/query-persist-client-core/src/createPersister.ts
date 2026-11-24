@@ -4,6 +4,7 @@ import {
   notifyManager,
   partialMatchKey,
 } from '@tanstack/query-core'
+import { isExpired } from './utils'
 import type {
   Query,
   QueryClient,
@@ -108,9 +109,9 @@ export function experimental_createQueryPersister<TStorageValue = string>({
   filters,
 }: StoragePersisterOptions<TStorageValue>) {
   function isExpiredOrBusted(persistedQuery: PersistedQuery) {
-    if (persistedQuery.state.dataUpdatedAt) {
-      const queryAge = Date.now() - persistedQuery.state.dataUpdatedAt
-      const expired = queryAge > maxAge
+    const { dataUpdatedAt } = persistedQuery.state
+    if (dataUpdatedAt) {
+      const expired = isExpired(dataUpdatedAt, maxAge)
       const busted = persistedQuery.buster !== buster
 
       if (expired || busted) {
