@@ -4,6 +4,7 @@ import {
   notifyManager,
   partialMatchKey,
 } from '@tanstack/query-core'
+import { trackWrite, watchWrites } from './writes'
 import type {
   Query,
   QueryClient,
@@ -78,6 +79,19 @@ export interface StoragePersisterOptions<TStorageValue = string> {
 
 export const PERSISTER_KEY_PREFIX = 'tanstack-query'
 
+interface RestoreToken {}
+
+/**
+ * The `restoreQueries` call that currently owns each QueryClient, shared by
+ * every persister so that a later restore supersedes an earlier one that is
+ * still reading storage.
+ */
+const activeQueryRestores = new WeakMap<QueryClient, RestoreToken>()
+
+const MAX_DISCARD_ATTEMPTS = 3
+
+const alwaysCurrent = () => true
+
 /**
  * Warning: experimental feature.
  * This utility function enables fine-grained query persistence.
@@ -123,6 +137,68 @@ export function experimental_createQueryPersister<TStorageValue = string>({
     return true
   }
 
+  async function tryDeserialize(value: TStorageValue) {
+    try {
+      return await deserialize(value)
+    } catch {
+      return undefined
+    }
+  }
+
+  function isSameEntry(
+    a: PersistedQuery | undefined,
+    b: PersistedQuery | undefined,
+  ) {
+    if (!a || !b) return a === b
+    return (
+      a.buster === b.buster && a.state.dataUpdatedAt === b.state.dataUpdatedAt
+    )
+  }
+
+  /**
+   * Resolves the valid entry stored under `storageKey`, starting from a value
+   * that was already read. An expired, busted or unreadable entry is only
+   * removed while storage still holds that same entry, because another write
+   * may have replaced it while it was being read.
+   */
+  async function resolveStoredQuery(
+    storage: AsyncStorage<TStorageValue>,
+    storageKey: string,
+    storedData: TStorageValue,
+    isCurrent: () => boolean,
+  ): Promise<PersistedQuery | undefined> {
+    let currentData = storedData
+    let persistedQuery = await tryDeserialize(currentData)
+
+    for (let attempt = 0; attempt < MAX_DISCARD_ATTEMPTS; attempt++) {
+      if (!isCurrent()) return
+      if (persistedQuery && !isExpiredOrBusted(persistedQuery)) {
+        return persistedQuery
+      }
+
+      const rejectedData = currentData
+      const rejectedQuery = persistedQuery
+      const isUnwritten = watchWrites(storage, storageKey)
+      const isUnchanged = () => isCurrent() && isUnwritten()
+      const latestData = await storage.getItem(storageKey)
+      if (!isCurrent() || latestData == null) return
+      if (latestData === rejectedData && isUnchanged()) {
+        await storage.removeItem(storageKey)
+        return
+      }
+
+      currentData = latestData
+      persistedQuery = await tryDeserialize(currentData)
+      if (!isCurrent()) return
+      if (isSameEntry(persistedQuery, rejectedQuery) && isUnchanged()) {
+        await storage.removeItem(storageKey)
+        return
+      }
+    }
+
+    return
+  }
+
   async function retrieveQuery<T>(
     queryHash: string,
     afterRestoreMacroTask?: (persistedQuery: PersistedQuery) => void,
@@ -132,17 +208,14 @@ export function experimental_createQueryPersister<TStorageValue = string>({
       try {
         const storedData = await storage.getItem(storageKey)
         if (storedData != null) {
-          let persistedQuery: PersistedQuery
-          try {
-            persistedQuery = await deserialize(storedData)
-          } catch {
-            await storage.removeItem(storageKey)
-            return
-          }
+          const persistedQuery = await resolveStoredQuery(
+            storage,
+            storageKey,
+            storedData,
+            alwaysCurrent,
+          )
 
-          if (isExpiredOrBusted(persistedQuery)) {
-            await storage.removeItem(storageKey)
-          } else {
+          if (persistedQuery) {
             if (afterRestoreMacroTask) {
               // Just after restoring we want to get fresh data from the server if it's stale
               notifyManager.schedule(() =>
@@ -189,15 +262,23 @@ export function experimental_createQueryPersister<TStorageValue = string>({
   async function persistQuery(query: Query) {
     if (storage != null) {
       const storageKey = `${prefix}-${query.queryHash}`
-      storage.setItem(
-        storageKey,
-        await serialize({
-          state: query.state,
-          queryKey: query.queryKey,
-          queryHash: query.queryHash,
-          buster: buster,
-        }),
-      )
+      const settleWrite = trackWrite(storage, storageKey)
+      let written: MaybePromise<unknown>
+      try {
+        written = storage.setItem(
+          storageKey,
+          await serialize({
+            state: query.state,
+            queryKey: query.queryKey,
+            queryHash: query.queryHash,
+            buster: buster,
+          }),
+        )
+      } catch (error) {
+        settleWrite()
+        throw error
+      }
+      Promise.resolve(written).finally(settleWrite)
     }
   }
 
@@ -252,16 +333,7 @@ export function experimental_createQueryPersister<TStorageValue = string>({
       const entries = await storage.entries()
       for (const [key, value] of entries) {
         if (key.startsWith(storageKeyPrefix)) {
-          let persistedQuery: PersistedQuery
-          try {
-            persistedQuery = await deserialize(value)
-          } catch {
-            await storage.removeItem(key)
-            continue
-          }
-          if (isExpiredOrBusted(persistedQuery)) {
-            await storage.removeItem(key)
-          }
+          await resolveStoredQuery(storage, key, value, alwaysCurrent)
         }
       }
     } else if (process.env.NODE_ENV === 'development') {
@@ -278,21 +350,23 @@ export function experimental_createQueryPersister<TStorageValue = string>({
     const { exact, queryKey } = filters
 
     if (storage?.entries) {
+      const token: RestoreToken = {}
+      activeQueryRestores.set(queryClient, token)
+      const isCurrent = () => activeQueryRestores.get(queryClient) === token
+
       const storageKeyPrefix = `${prefix}-`
       const entries = await storage.entries()
       for (const [key, value] of entries) {
+        if (!isCurrent()) return
         if (key.startsWith(storageKeyPrefix)) {
-          let persistedQuery: PersistedQuery
-          try {
-            persistedQuery = await deserialize(value)
-          } catch {
-            await storage.removeItem(key)
-            continue
-          }
-          if (isExpiredOrBusted(persistedQuery)) {
-            await storage.removeItem(key)
-            continue
-          }
+          const persistedQuery = await resolveStoredQuery(
+            storage,
+            key,
+            value,
+            isCurrent,
+          )
+          if (!isCurrent()) return
+          if (!persistedQuery) continue
 
           if (queryKey) {
             if (exact) {

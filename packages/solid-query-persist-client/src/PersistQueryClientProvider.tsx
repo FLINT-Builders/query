@@ -24,13 +24,28 @@ export const PersistQueryClientProvider = (
     queryClient: props.client,
   }))
 
+  let restoreGeneration = 0
+  let restoredBuster: string | undefined
+
   createEffect(() => {
+    const currentOptions = options()
+    const generation = ++restoreGeneration
+    const buster = currentOptions.buster ?? ''
+    if (restoredBuster !== undefined && restoredBuster !== buster) {
+      currentOptions.queryClient.clear()
+    }
+    restoredBuster = buster
+
     setIsRestoring(true)
-    persistQueryClientRestore(options())
-      .then(() => props.onSuccess?.())
-      .catch(() => props.onError?.())
+    persistQueryClientRestore(currentOptions)
+      .then(() =>
+        generation === restoreGeneration ? props.onSuccess?.() : undefined,
+      )
+      .catch(() =>
+        generation === restoreGeneration ? props.onError?.() : undefined,
+      )
       .finally(() => {
-        setIsRestoring(false)
+        if (generation === restoreGeneration) setIsRestoring(false)
       })
   })
 

@@ -30,7 +30,9 @@ export const PersistQueryClientProvider = ({
 }: PersistQueryClientProviderProps): VNode => {
   const [isRestoring, setIsRestoring] = useState(true)
   const refs = useRef({ persistOptions, onSuccess, onError })
-  const didRestore = useRef(false)
+  const restoredBuster = useRef<string | undefined>(undefined)
+  const restoreGeneration = useRef(0)
+  const buster = persistOptions.buster ?? ''
 
   useEffect(() => {
     refs.current = { persistOptions, onSuccess, onError }
@@ -41,17 +43,24 @@ export const PersistQueryClientProvider = ({
       ...refs.current.persistOptions,
       queryClient: props.client,
     }
-    if (!didRestore.current) {
-      didRestore.current = true
+    if (restoredBuster.current !== buster) {
+      if (restoredBuster.current !== undefined) {
+        props.client.clear()
+        setIsRestoring(true)
+      }
+      restoredBuster.current = buster
+      const generation = ++restoreGeneration.current
+      const isCurrent = () => generation === restoreGeneration.current
       persistQueryClientRestore(options)
-        .then(() => refs.current.onSuccess?.())
-        .catch(() => refs.current.onError?.())
+        .then(() => (isCurrent() ? refs.current.onSuccess?.() : undefined))
+        .catch(() => (isCurrent() ? refs.current.onError?.() : undefined))
         .finally(() => {
-          setIsRestoring(false)
+          if (isCurrent()) setIsRestoring(false)
         })
+      return undefined
     }
     return isRestoring ? undefined : persistQueryClientSubscribe(options)
-  }, [props.client, isRestoring])
+  }, [props.client, isRestoring, buster])
 
   return (
     <QueryClientProvider {...props}>
