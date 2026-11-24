@@ -1,8 +1,14 @@
 import {
-  persistQueryClientRestore,
+  persistQueryClientRestoreLatest,
   persistQueryClientSubscribe,
 } from '@tanstack/query-persist-client-core'
-import { createEffect, createMemo, createSignal, onCleanup } from 'solid-js'
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  onCleanup,
+  untrack,
+} from 'solid-js'
 import { IsRestoringProvider, QueryClientProvider } from '@tanstack/solid-query'
 import type { PersistQueryClientOptions } from '@tanstack/query-persist-client-core'
 import type { OmitKeyof, QueryClientProviderProps } from '@tanstack/solid-query'
@@ -25,21 +31,30 @@ export const PersistQueryClientProvider = (
   }))
 
   createEffect(() => {
-    setIsRestoring(true)
-    persistQueryClientRestore(options())
-      .then(() => props.onSuccess?.())
-      .catch(() => props.onError?.())
-      .finally(() => {
-        setIsRestoring(false)
-      })
-  })
-
-  createEffect(() => {
+    const restoreOptions = options()
+    let active = true
     let unsubscribe = () => {}
-    if (!isRestoring()) {
-      unsubscribe = persistQueryClientSubscribe(options())
-    }
-    onCleanup(() => unsubscribe())
+
+    untrack(() => {
+      setIsRestoring(true)
+      const [isLatest, restorePromise] =
+        persistQueryClientRestoreLatest(restoreOptions)
+      restorePromise
+        .then(() => (active ? props.onSuccess?.() : undefined))
+        .catch(() => (active ? props.onError?.() : undefined))
+        .finally(() => {
+          if (!active) return
+          if (isLatest()) {
+            unsubscribe = persistQueryClientSubscribe(restoreOptions)
+          }
+          setIsRestoring(false)
+        })
+    })
+
+    onCleanup(() => {
+      active = false
+      unsubscribe()
+    })
   })
 
   return (

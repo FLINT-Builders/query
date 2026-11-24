@@ -43,6 +43,8 @@ persistQueryClientSave({ queryClient, persister, buster: buildHash })
 persistQueryClientRestore({ queryClient, persister, buster: buildHash })
 ```
 
+`persistQueryClient` and `PersistQueryClientProvider` restore a `QueryClient` for one `persister` and `buster` at a time. When they restore a client that was last restored for a different `persister` or `buster`, they clear the client first, so its in-memory queries and mutations are not saved under the new `persister` or `buster` (see [`persistQueryClientRestoreLatest`](#persistqueryclientrestorelatest)). `persistQueryClientRestore` only discards the persisted cache and leaves the in-memory cache untouched.
+
 ### Removal
 
 If data is found to be any of the following:
@@ -97,6 +99,24 @@ You can use this to restore the cache at moment(s) you choose.
 
 ```tsx
 persistQueryClientRestore({
+  queryClient,
+  persister,
+  maxAge = 1000 * 60 * 60 * 24, // 24 hours
+  buster = '',
+  hydrateOptions = undefined,
+})
+```
+
+### `persistQueryClientRestoreLatest`
+
+Restores like [`persistQueryClientRestore`](#persistqueryclientrestore), for a client that is persisted for one `persister` and `buster` at a time. `persistQueryClient` and `PersistQueryClientProvider` use it.
+
+- If the client was last restored this way for a different `persister` or `buster`, it is cleared first.
+- If a newer restore starts for the same client before this one finishes, this one neither hydrates nor removes the persisted cache.
+- It returns an `isLatest` function, which tells whether this is still the latest restore for the client, and the restore promise. Only subscribe while `isLatest()` is `true`.
+
+```tsx
+const [isLatest, restorePromise] = persistQueryClientRestoreLatest({
   queryClient,
   persister,
   maxAge = 1000 * 60 * 60 * 24, // 24 hours
