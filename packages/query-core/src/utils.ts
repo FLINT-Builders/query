@@ -134,7 +134,9 @@ export function isValidTimeout(value: unknown): value is number {
 }
 
 export function timeUntilStale(updatedAt: number, staleTime?: number): number {
-  return Math.max(updatedAt + (staleTime || 0) - Date.now(), 0)
+  const now = Date.now()
+  // A timestamp ahead of the clock must not extend freshness past `staleTime`
+  return Math.max(Math.min(updatedAt, now) + (staleTime || 0) - now, 0)
 }
 
 export function resolveQueryValue<
