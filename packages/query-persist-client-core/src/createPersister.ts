@@ -107,6 +107,10 @@ export function experimental_createQueryPersister<TStorageValue = string>({
   refetchOnRestore = true,
   filters,
 }: StoragePersisterOptions<TStorageValue>) {
+  // Incremented synchronously by `removeQueries`. Every write records the value
+  // when it starts and is dropped if a removal happened in the meantime.
+  let removalGeneration = 0
+
   function isExpiredOrBusted(persistedQuery: PersistedQuery) {
     if (persistedQuery.state.dataUpdatedAt) {
       const queryAge = Date.now() - persistedQuery.state.dataUpdatedAt
@@ -172,9 +176,14 @@ export function experimental_createQueryPersister<TStorageValue = string>({
     queryClient: QueryClient,
   ) {
     if (storage != null) {
-      const query = queryClient.getQueryCache().find({ queryKey })
+      const queryCache = queryClient.getQueryCache()
+      const query = queryCache.find({ queryKey })
       if (query) {
-        await persistQuery(query)
+        await writeQuery(
+          query,
+          removalGeneration,
+          () => queryCache.get(query.queryHash) === query,
+        )
       } else {
         if (process.env.NODE_ENV === 'development') {
           console.warn(
@@ -187,17 +196,27 @@ export function experimental_createQueryPersister<TStorageValue = string>({
   }
 
   async function persistQuery(query: Query) {
+    await writeQuery(query, removalGeneration)
+  }
+
+  async function writeQuery(
+    query: Query,
+    generation: number,
+    isStillCached: () => boolean = () => true,
+  ) {
     if (storage != null) {
       const storageKey = `${prefix}-${query.queryHash}`
-      storage.setItem(
-        storageKey,
-        await serialize({
-          state: query.state,
-          queryKey: query.queryKey,
-          queryHash: query.queryHash,
-          buster: buster,
-        }),
-      )
+      const serialized = await serialize({
+        state: query.state,
+        queryKey: query.queryKey,
+        queryHash: query.queryHash,
+        buster: buster,
+      })
+      // No `await` may separate this check from `setItem`.
+      if (generation !== removalGeneration || !isStillCached()) {
+        return
+      }
+      storage.setItem(storageKey, serialized)
     }
   }
 
@@ -207,12 +226,20 @@ export function experimental_createQueryPersister<TStorageValue = string>({
     query: Query,
   ) {
     const matchesFilter = filters ? matchQuery(filters, query) : true
+    const generation = removalGeneration
+    const queryCache = ctx.client.getQueryCache()
+    const wasCached = queryCache.get(query.queryHash) === query
+    const isStillCached = () =>
+      !wasCached || queryCache.get(query.queryHash) === query
 
     // Try to restore only if we do not have any data in the cache and we have persister defined
     if (matchesFilter && query.state.data === undefined && storage != null) {
       const restoredData = await retrieveQuery(
         query.queryHash,
         (persistedQuery: PersistedQuery) => {
+          if (generation !== removalGeneration || !isStillCached()) {
+            return
+          }
           // Set proper updatedAt, since resolving in the first pass overrides those values
           query.setState({
             dataUpdatedAt: persistedQuery.state.dataUpdatedAt,
@@ -228,7 +255,7 @@ export function experimental_createQueryPersister<TStorageValue = string>({
         },
       )
 
-      if (restoredData !== undefined) {
+      if (restoredData !== undefined && generation === removalGeneration) {
         return Promise.resolve(restoredData as T)
       }
     }
@@ -239,7 +266,7 @@ export function experimental_createQueryPersister<TStorageValue = string>({
     if (matchesFilter && storage != null) {
       // Persist if we have storage defined, we use timeout to get proper state to be persisted
       notifyManager.schedule(() => {
-        persistQuery(query)
+        writeQuery(query, generation, isStillCached)
       })
     }
 
@@ -324,6 +351,7 @@ export function experimental_createQueryPersister<TStorageValue = string>({
     filters: Pick<QueryFilters, 'queryKey' | 'exact'> = {},
   ): Promise<void> {
     const { exact, queryKey } = filters
+    removalGeneration++
 
     if (storage?.entries) {
       const entries = await storage.entries()
