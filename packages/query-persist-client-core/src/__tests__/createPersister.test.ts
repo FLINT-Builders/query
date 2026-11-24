@@ -863,3 +863,57 @@ describe('createPersister', () => {
     })
   })
 })
+
+describe('persisted queries that differ by an own __proto__ field', () => {
+  function persistedCanonical(queryHash: string) {
+    return JSON.stringify({
+      buster: '',
+      queryHash,
+      queryKey: ['items', { status: 'open' }],
+      state: {
+        data: 'from-canonical-request',
+        dataUpdatedAt: Date.now(),
+      },
+    })
+  }
+
+  it('does not restore a canonical entry for a key that only adds __proto__', async () => {
+    const storage = getFreshStorage()
+    const persister = experimental_createQueryPersister({ storage })
+    const canonicalKey = ['items', { status: 'open' }]
+    const alteredKey = [
+      'items',
+      JSON.parse('{"status":"open","__proto__":{"injected":true}}'),
+    ]
+    const queryHash = hashKey(canonicalKey)
+    await storage.setItem(
+      `${PERSISTER_KEY_PREFIX}-${queryHash}`,
+      persistedCanonical(queryHash),
+    )
+
+    const client = new QueryClient()
+    await persister.restoreQueries(client, {
+      queryKey: alteredKey,
+      exact: true,
+    })
+
+    expect(client.getQueryData(canonicalKey)).toBeUndefined()
+    expect(client.getQueryData(alteredKey)).toBeUndefined()
+  })
+
+  it('does not remove a canonical entry when the exact key only adds __proto__', async () => {
+    const storage = getFreshStorage()
+    const persister = experimental_createQueryPersister({ storage })
+    const canonicalKey = ['items', { status: 'open' }]
+    const alteredKey = [
+      'items',
+      JSON.parse('{"status":"open","__proto__":{"injected":true}}'),
+    ]
+    const storageKey = `${PERSISTER_KEY_PREFIX}-${hashKey(canonicalKey)}`
+    await storage.setItem(storageKey, persistedCanonical(hashKey(canonicalKey)))
+
+    await persister.removeQueries({ queryKey: alteredKey, exact: true })
+
+    expect(await storage.getItem(storageKey)).toBeTruthy()
+  })
+})
