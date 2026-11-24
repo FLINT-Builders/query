@@ -275,23 +275,93 @@ export function hashQueryKeyByOptions<TQueryKey extends QueryKey = QueryKey>(
  * Default query & mutation keys hash function.
  * Hashes the value into a stable hash.
  *
+ * JSON-serializable keys hash to their `JSON.stringify` output. Values that
+ * JSON would coerce to `null` (`undefined` array elements, `NaN`, `Infinity`,
+ * `-Infinity` and invalid dates) are written as bare tokens instead, so they
+ * never share a hash with `null` or with each other. An `undefined` object
+ * property is still omitted, like a missing property.
+ *
  * @example
  * ```ts
  * // Object keys are sorted, so key order doesn't affect the hash:
  * hashKey(['todos', { page: 1, filter: 'done' }]) // === '["todos",{"filter":"done","page":1}]'
+ * hashKey(['todo', undefined]) // === '["todo",undefined]'
+ * hashKey(['todo', NaN]) // === '["todo",NaN]'
  * ```
  */
 export function hashKey(queryKey: QueryKey | MutationKey): string {
-  return JSON.stringify(queryKey, (_, val) =>
-    isPlainObject(val)
-      ? Object.keys(val)
-          .sort()
-          .reduce((result, key) => {
-            result[key] = val[key]
-            return result
-          }, {} as any)
-      : val,
-  )
+  return serializeKeyValue({ '': queryKey }, '', false, []) as string
+}
+
+function serializeKeyValue(
+  holder: any,
+  key: string,
+  inArray: boolean,
+  stack: Array<object>,
+): string | undefined {
+  let value = holder[key]
+
+  if (value instanceof Date && Number.isNaN(value.getTime())) {
+    return 'Invalid Date'
+  }
+
+  if (
+    value !== null &&
+    (typeof value === 'object' || typeof value === 'bigint') &&
+    typeof value.toJSON === 'function'
+  ) {
+    value = value.toJSON(key)
+  }
+
+  if (
+    value instanceof Number ||
+    value instanceof String ||
+    value instanceof Boolean
+  ) {
+    value = value.valueOf()
+  }
+
+  if (value === undefined) {
+    return inArray ? 'undefined' : undefined
+  }
+
+  if (typeof value === 'number' && !Number.isFinite(value)) {
+    return String(value)
+  }
+
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value)
+  }
+
+  if (stack.includes(value)) {
+    throw new TypeError('Converting circular structure to JSON')
+  }
+  stack.push(value)
+
+  let result: string
+  if (Array.isArray(value)) {
+    const items: Array<string> = []
+    for (let i = 0; i < value.length; i++) {
+      items.push(serializeKeyValue(value, String(i), true, stack) ?? 'null')
+    }
+    result = `[${items.join(',')}]`
+  } else {
+    const keys = Object.keys(value)
+    if (isPlainObject(value)) {
+      keys.sort()
+    }
+    const entries: Array<string> = []
+    for (const k of keys) {
+      const serialized = serializeKeyValue(value, k, false, stack)
+      if (serialized !== undefined) {
+        entries.push(`${JSON.stringify(k)}:${serialized}`)
+      }
+    }
+    result = `{${entries.join(',')}}`
+  }
+
+  stack.pop()
+  return result
 }
 
 /**
@@ -299,7 +369,7 @@ export function hashKey(queryKey: QueryKey | MutationKey): string {
  */
 export function partialMatchKey(a: QueryKey, b: QueryKey): boolean
 export function partialMatchKey(a: any, b: any): boolean {
-  if (a === b) {
+  if (a === b || (Number.isNaN(a) && Number.isNaN(b))) {
     return true
   }
 
