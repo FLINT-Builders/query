@@ -186,18 +186,36 @@ export function experimental_createQueryPersister<TStorageValue = string>({
     }
   }
 
+  // The latest requested write per query hash. removeQueries drops matching entries,
+  // so writes requested before a removal never reach storage afterwards.
+  const pendingWrites = new Map<string, { queryKey: QueryKey }>()
+
+  function requestWrite(query: Query) {
+    const token = { queryKey: query.queryKey }
+    pendingWrites.set(query.queryHash, token)
+    return token
+  }
+
   async function persistQuery(query: Query) {
     if (storage != null) {
+      await writeQuery(query, requestWrite(query))
+    }
+  }
+
+  async function writeQuery(query: Query, token: { queryKey: QueryKey }) {
+    if (storage != null) {
       const storageKey = `${prefix}-${query.queryHash}`
-      storage.setItem(
-        storageKey,
-        await serialize({
-          state: query.state,
-          queryKey: query.queryKey,
-          queryHash: query.queryHash,
-          buster: buster,
-        }),
-      )
+      const serialized = await serialize({
+        state: query.state,
+        queryKey: query.queryKey,
+        queryHash: query.queryHash,
+        buster: buster,
+      })
+      if (pendingWrites.get(query.queryHash) !== token) {
+        return
+      }
+      pendingWrites.delete(query.queryHash)
+      storage.setItem(storageKey, serialized)
     }
   }
 
@@ -237,9 +255,10 @@ export function experimental_createQueryPersister<TStorageValue = string>({
     const queryFnResult = await queryFn(ctx)
 
     if (matchesFilter && storage != null) {
+      const token = requestWrite(query)
       // Persist if we have storage defined, we use timeout to get proper state to be persisted
       notifyManager.schedule(() => {
-        persistQuery(query)
+        writeQuery(query, token)
       })
     }
 
@@ -324,6 +343,17 @@ export function experimental_createQueryPersister<TStorageValue = string>({
     filters: Pick<QueryFilters, 'queryKey' | 'exact'> = {},
   ): Promise<void> {
     const { exact, queryKey } = filters
+
+    for (const [queryHash, token] of pendingWrites) {
+      if (
+        !queryKey ||
+        (exact
+          ? queryHash === hashKey(queryKey)
+          : partialMatchKey(token.queryKey, queryKey))
+      ) {
+        pendingWrites.delete(queryHash)
+      }
+    }
 
     if (storage?.entries) {
       const entries = await storage.entries()

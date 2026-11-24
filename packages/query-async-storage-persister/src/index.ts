@@ -48,11 +48,18 @@ export const createAsyncStoragePersister = ({
   retry,
 }: CreateAsyncStoragePersisterOptions): Persister => {
   if (storage) {
+    // Incremented by removeClient so saves requested before a removal never write afterwards.
+    let generation = 0
+
     const trySave = async (
       persistedClient: PersistedClient,
+      saveGeneration: number,
     ): Promise<Error | undefined> => {
       try {
         const serialized = await serialize(persistedClient)
+        if (saveGeneration !== generation) {
+          return
+        }
         await storage.setItem(key, serialized)
         return
       } catch (error) {
@@ -60,27 +67,30 @@ export const createAsyncStoragePersister = ({
       }
     }
 
-    return {
-      persistClient: asyncThrottle(
-        async (persistedClient) => {
-          let client: PersistedClient | undefined = persistedClient
-          let error = await trySave(client)
-          let errorCount = 0
-          while (error && client) {
-            errorCount++
-            client = await retry?.({
-              persistedClient: client,
-              error,
-              errorCount,
-            })
+    const throttledPersist = asyncThrottle(
+      async (persistedClient: PersistedClient, saveGeneration: number) => {
+        let client: PersistedClient | undefined = persistedClient
+        let error = await trySave(client, saveGeneration)
+        let errorCount = 0
+        while (error && client && saveGeneration === generation) {
+          errorCount++
+          client = await retry?.({
+            persistedClient: client,
+            error,
+            errorCount,
+          })
 
-            if (client) {
-              error = await trySave(client)
-            }
+          if (client) {
+            error = await trySave(client, saveGeneration)
           }
-        },
-        { interval: throttleTime },
-      ),
+        }
+      },
+      { interval: throttleTime },
+    )
+
+    return {
+      persistClient: (persistedClient) =>
+        throttledPersist(persistedClient, generation),
       restoreClient: async () => {
         const cacheString = await storage.getItem(key)
 
@@ -90,7 +100,11 @@ export const createAsyncStoragePersister = ({
 
         return await deserialize(cacheString)
       },
-      removeClient: () => storage.removeItem(key),
+      removeClient: () => {
+        generation++
+        throttledPersist.cancel()
+        return storage.removeItem(key)
+      },
     }
   }
 
