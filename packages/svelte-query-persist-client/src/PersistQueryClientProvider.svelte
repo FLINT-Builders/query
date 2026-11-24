@@ -37,17 +37,25 @@
   })
 
   $effect(() => {
-    return isRestoring.current ? () => {} : persistQueryClientSubscribe(options)
-  })
+    const currentOptions = options
+    let isCurrent = true
+    let unsubscribe = () => {}
 
-  $effect(() => {
     isRestoring.current = true
-    persistQueryClientRestore(options)
-      .then(() => props.onSuccess?.())
-      .catch(() => props.onError?.())
+    persistQueryClientRestore(currentOptions)
+      .then(() => (isCurrent ? props.onSuccess?.() : undefined))
+      .catch(() => (isCurrent ? props.onError?.() : undefined))
       .finally(() => {
-        isRestoring.current = false
+        if (isCurrent) {
+          unsubscribe = persistQueryClientSubscribe(currentOptions)
+          isRestoring.current = false
+        }
       })
+
+    return () => {
+      isCurrent = false
+      unsubscribe()
+    }
   })
 </script>
 

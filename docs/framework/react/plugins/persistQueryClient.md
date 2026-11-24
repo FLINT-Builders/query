@@ -43,6 +43,8 @@ persistQueryClientSave({ queryClient, persister, buster: buildHash })
 persistQueryClientRestore({ queryClient, persister, buster: buildHash })
 ```
 
+If a `queryClient` that was already restored is restored again with a different `buster` or `persister`, its in-memory queries and mutations are cleared before restoring, so they are not shown or persisted under the new `buster`. A restore that is still in flight when a newer restore of the same `queryClient` starts is ignored.
+
 ### Removal
 
 If data is found to be any of the following:
@@ -77,7 +79,7 @@ persistQueryClientSave({
 Runs `persistQueryClientSave` whenever the cache changes for your `queryClient`. For example: you might initiate the `subscribe` when a user logs-in and checks "Remember me".
 
 - It returns an `unsubscribe` function which you can use to discontinue the monitor; ending the updates to the persisted cache.
-- If you want to erase the persisted cache after the `unsubscribe`, you can send a new `buster` to `persistQueryClientRestore` which will trigger the persister's `removeClient` function and discard the persisted cache.
+- If you want to erase the persisted cache after the `unsubscribe`, you can send a new `buster` to `persistQueryClientRestore` which will trigger the persister's `removeClient` function and discard the persisted cache. If the `queryClient` was already restored with the previous `buster`, its in-memory cache is cleared as well.
 
 ```tsx
 persistQueryClientSubscribe({
