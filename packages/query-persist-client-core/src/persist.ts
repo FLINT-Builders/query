@@ -62,33 +62,89 @@ function isCacheEventType(eventType: NotifyEventType) {
   return cacheEventTypes.includes(eventType)
 }
 
+interface RestoreBinding {
+  persister: Persister
+  buster: string
+}
+
+/**
+ * The persister and buster each QueryClient was last restored for.
+ * A restore only acts if its binding is still the current one.
+ */
+const restoreBindings = new WeakMap<QueryClient, RestoreBinding>()
+
+/**
+ * Binds the QueryClient to a persister and buster. If the client was
+ * restored for a different persister or buster, the queries and mutations
+ * it holds belong to that cache, so the client is cleared.
+ */
+function bindQueryClient({
+  queryClient,
+  persister,
+  buster = '',
+}: PersistQueryClientRootOptions): RestoreBinding {
+  const previous = restoreBindings.get(queryClient)
+  if (
+    previous &&
+    (previous.persister !== persister || previous.buster !== buster)
+  ) {
+    queryClient.clear()
+  }
+  const binding: RestoreBinding = { persister, buster }
+  restoreBindings.set(queryClient, binding)
+  return binding
+}
+
+function isCurrentBinding(queryClient: QueryClient, binding: RestoreBinding) {
+  return restoreBindings.get(queryClient) === binding
+}
+
 /**
  * Restores persisted data to the QueryCache
  *  - data obtained from persister.restoreClient
  *  - data is hydrated using hydrateOptions
  * If data is expired, busted, empty, or throws, it runs persister.removeClient
+ *
+ * If the QueryClient was last restored with a different persister or buster,
+ * it is cleared before restoring. A restore that is superseded by a newer
+ * restore of the same QueryClient does nothing once it resolves.
  */
-export async function persistQueryClientRestore({
-  queryClient,
-  persister,
-  maxAge = 1000 * 60 * 60 * 24,
-  buster = '',
-  hydrateOptions,
-}: PersistedQueryClientRestoreOptions) {
+export function persistQueryClientRestore(
+  options: PersistedQueryClientRestoreOptions,
+): Promise<void> {
+  return restoreQueryClient(options, bindQueryClient(options))
+}
+
+async function restoreQueryClient(
+  {
+    queryClient,
+    persister,
+    maxAge = 1000 * 60 * 60 * 24,
+    buster = '',
+    hydrateOptions,
+  }: PersistedQueryClientRestoreOptions,
+  binding: RestoreBinding,
+): Promise<void> {
+  let shouldRemove = false
+
   try {
     const persistedClient = await persister.restoreClient()
+
+    if (!isCurrentBinding(queryClient, binding)) {
+      return
+    }
 
     if (persistedClient) {
       if (persistedClient.timestamp) {
         const expired = Date.now() - persistedClient.timestamp > maxAge
         const busted = persistedClient.buster !== buster
         if (expired || busted) {
-          return persister.removeClient()
+          shouldRemove = true
         } else {
           hydrate(queryClient, persistedClient.clientState, hydrateOptions)
         }
       } else {
-        return persister.removeClient()
+        shouldRemove = true
       }
     }
   } catch (err) {
@@ -99,9 +155,15 @@ export async function persistQueryClientRestore({
       )
     }
 
-    await persister.removeClient()
+    if (isCurrentBinding(queryClient, binding)) {
+      await persister.removeClient()
+    }
 
     throw err
+  }
+
+  if (shouldRemove) {
+    await persister.removeClient()
   }
 }
 
@@ -168,8 +230,9 @@ export function persistQueryClient(
   }
 
   // Attempt restore
-  const restorePromise = persistQueryClientRestore(props).then(() => {
-    if (!hasUnsubscribed) {
+  const binding = bindQueryClient(props)
+  const restorePromise = restoreQueryClient(props, binding).then(() => {
+    if (!hasUnsubscribed && isCurrentBinding(props.queryClient, binding)) {
       // Subscribe to changes in the query cache to trigger the save
       persistQueryClientUnsubscribe = persistQueryClientSubscribe(props)
     }
