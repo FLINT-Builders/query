@@ -3,8 +3,9 @@ import {
   addToEnd,
   addToStart,
   ensureQueryFn,
+  replaceEqualDeep,
 } from './utils'
-import type { QueryBehavior } from './query'
+import type { Query, QueryBehavior } from './query'
 import type {
   InfiniteData,
   InfiniteQueryPageParamsOptions,
@@ -12,6 +13,27 @@ import type {
   QueryFunctionContext,
   QueryKey,
 } from './types'
+
+/**
+ * Page params that a query fetched itself or that app code wrote through
+ * `setQueryData` or `initialData`. Data restored from elsewhere (hydration,
+ * persisters, `setState`) is never recorded here, so a refetch only replays
+ * stored pages that start at one of these params, and never more pages than
+ * were recorded.
+ */
+const knownPageParams = new WeakMap<Query<any, any, any, any>, Array<unknown>>()
+
+/** @internal */
+export function rememberPageParams(
+  query: Query<any, any, any, any>,
+  data: unknown,
+): void {
+  const pageParams = (data as Partial<InfiniteData<unknown>> | undefined)
+    ?.pageParams
+  if (Array.isArray(pageParams)) {
+    knownPageParams.set(query, [...pageParams])
+  }
+}
 
 export function infiniteQueryBehavior<TQueryFnData, TError, TData, TPageParam>(
   pages?: number,
@@ -79,6 +101,13 @@ export function infiniteQueryBehavior<TQueryFnData, TError, TData, TPageParam>(
           }
         }
 
+        const known = knownPageParams.get(query) ?? []
+        const storedPagesAreKnown =
+          oldPages.length > 0 &&
+          known.some(
+            (param) => replaceEqualDeep(param, oldPageParams[0]) === param,
+          )
+
         // fetch next / previous page?
         if (direction && oldPages.length) {
           const previous = direction === 'backward'
@@ -90,14 +119,29 @@ export function infiniteQueryBehavior<TQueryFnData, TError, TData, TPageParam>(
           const param = pageParamFn(options, oldData)
 
           result = await fetchPage(oldData, param, previous)
+          if (storedPagesAreKnown && result !== oldData) {
+            const addTo = previous ? addToStart : addToEnd
+            knownPageParams.set(
+              query,
+              addTo(known, param, context.options.maxPages),
+            )
+          }
         } else {
-          const remainingPages = pages ?? oldPages.length
+          const storedPages = storedPagesAreKnown
+            ? Math.min(oldPages.length, known.length)
+            : 1
+          const remainingPages = Math.min(
+            pages ?? storedPages,
+            context.options.maxPages || Infinity,
+          )
 
           // Fetch all pages
           do {
             const param =
               currentPage === 0
-                ? (oldPageParams[0] ?? options.initialPageParam)
+                ? storedPagesAreKnown
+                  ? (oldPageParams[0] ?? options.initialPageParam)
+                  : options.initialPageParam
                 : getNextPageParam(options, result)
             if (currentPage > 0 && param == null) {
               break
@@ -105,6 +149,8 @@ export function infiniteQueryBehavior<TQueryFnData, TError, TData, TPageParam>(
             result = await fetchPage(result, param)
             currentPage++
           } while (currentPage < remainingPages)
+
+          rememberPageParams(query, result)
         }
 
         return result

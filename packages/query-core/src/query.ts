@@ -9,7 +9,10 @@ import {
 import { notifyManager } from './notifyManager'
 import { CancelledError, canFetch, createRetryer } from './retryer'
 import { Removable } from './removable'
-import { infiniteQueryBehavior } from './infiniteQueryBehavior'
+import {
+  infiniteQueryBehavior,
+  rememberPageParams,
+} from './infiniteQueryBehavior'
 import type { QueryCache } from './queryCache'
 import type { QueryClient } from './queryClient'
 import type {
@@ -256,6 +259,9 @@ export class Query<
     this.queryHash = config.queryHash
     this.#initialState = getDefaultState(this.options)
     this.state = config.state ?? this.#initialState
+    if (!config.state) {
+      rememberPageParams(this, this.state.data)
+    }
     this.scheduleGc()
   }
   /**
@@ -298,6 +304,7 @@ export class Query<
           successState(defaultState.data, defaultState.dataUpdatedAt),
         )
         this.#initialState = defaultState
+        rememberPageParams(this, defaultState.data)
       }
     }
   }
@@ -314,6 +321,10 @@ export class Query<
     options?: SetDataOptions & { manual: boolean },
   ): TData {
     const data = replaceData(this.state.data, newData, this.options)
+
+    if (options?.manual) {
+      rememberPageParams(this, data)
+    }
 
     // Set data and mark it as cached
     this.#dispatch({
@@ -377,6 +388,7 @@ export class Query<
   reset(): void {
     this.destroy()
     this.setState(this.resetState)
+    rememberPageParams(this, this.resetState.data)
   }
 
   /**

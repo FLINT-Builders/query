@@ -304,13 +304,22 @@ export function experimental_createQueryPersister<TStorageValue = string>({
             }
           }
 
-          queryClient.setQueryData(
-            persistedQuery.queryKey,
-            persistedQuery.state.data,
-            {
-              updatedAt: persistedQuery.state.dataUpdatedAt,
-            },
+          // Restored data is written with `setState` rather than
+          // `setQueryData`, so it is not treated as data the app wrote itself.
+          const query = queryClient.getQueryCache().build(
+            queryClient,
+            queryClient.defaultQueryOptions({
+              queryKey: persistedQuery.queryKey,
+            }),
           )
+          query.setState({
+            data: persistedQuery.state.data,
+            dataUpdateCount: query.state.dataUpdateCount + 1,
+            dataUpdatedAt: persistedQuery.state.dataUpdatedAt,
+            error: null,
+            isInvalidated: false,
+            status: 'success',
+          })
         }
       }
     } else if (process.env.NODE_ENV === 'development') {
