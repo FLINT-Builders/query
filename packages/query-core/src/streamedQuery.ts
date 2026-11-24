@@ -87,10 +87,36 @@ export function streamedQuery<
   TQueryKey
 > {
   return async (context) => {
-    const query = context.client
-      .getQueryCache()
-      .find({ queryKey: context.queryKey, exact: true })
-    const isRefetch = !!query && query.isFetched()
+    const queryCache = context.client.getQueryCache()
+    const query = queryCache.find<TData>({
+      queryKey: context.queryKey,
+      exact: true,
+    })
+
+    // Chunks are written to the query that started this fetch, never by key,
+    // and only while that fetch is still the query's current one. A stream
+    // that does not read the abort signal keeps running after the query is
+    // removed, reset, cancelled or fetched again.
+    const fetchPromise = query?.promise
+    let fetchSettled = false
+    const onFetchSettled = () => {
+      fetchSettled = true
+    }
+    fetchPromise?.then(onFetchSettled, onFetchSettled)
+
+    const isCurrentFetch = (): boolean =>
+      !!query &&
+      !!fetchPromise &&
+      !fetchSettled &&
+      query.promise === fetchPromise &&
+      query.state.fetchStatus !== 'idle' &&
+      queryCache.get(query.queryHash) === query
+
+    if (!query || !isCurrentFetch()) {
+      return initialValue
+    }
+
+    const isRefetch = query.isFetched()
     if (isRefetch && refetchMode === 'reset') {
       query.setState({
         ...query.resetState,
@@ -120,7 +146,7 @@ export function streamedQuery<
     const isReplaceRefetch = isRefetch && refetchMode === 'replace'
 
     for await (const chunk of stream) {
-      if (cancelled) {
+      if (cancelled || !isCurrentFetch()) {
         break
       }
 
@@ -128,18 +154,29 @@ export function streamedQuery<
         // don't append to the cache directly when replace-refetching
         result = reducer(result, chunk)
       } else {
-        context.client.setQueryData<TData>(context.queryKey, (prev) =>
-          reducer(prev === undefined ? initialValue : prev, chunk),
-        )
+        const prev = query.state.data
+        const next = reducer(prev === undefined ? initialValue : prev, chunk)
+        // the reducer may have changed the cache
+        if (!isCurrentFetch()) {
+          break
+        }
+        if (next !== undefined) {
+          query.setData(next, { manual: true })
+        }
       }
     }
 
     // finalize result: replace-refetching needs to write to the cache
-    if (isReplaceRefetch && !cancelled) {
-      context.client.setQueryData<TData>(context.queryKey, result)
+    if (
+      isReplaceRefetch &&
+      !cancelled &&
+      result !== undefined &&
+      isCurrentFetch()
+    ) {
+      query.setData(result, { manual: true })
     }
 
-    const data = context.client.getQueryData<TData>(context.queryKey)
+    const data = query.state.data
     return data === undefined ? initialValue : data
   }
 }
