@@ -43,6 +43,8 @@ persistQueryClientSave({ queryClient, persister, buster: buildHash })
 persistQueryClientRestore({ queryClient, persister, buster: buildHash })
 ```
 
+When a `QueryClient` that was already restored is restored again with a different `buster` or `persister` (for example, using the signed-in user's id as the `buster`), the data that is currently in that client is discarded before the new cache is restored, and a restore that was still in progress for the previous `buster` or `persister` is ignored.
+
 ### Removal
 
 If data is found to be any of the following:
@@ -214,9 +216,10 @@ ReactDOM.createRoot(rootElement).render(
 
 - `persistOptions: PersistQueryClientOptions`
   - all [options](#options) you can pass to [persistQueryClient](#persistqueryclient) minus the QueryClient itself
+  - when `client`, `persistOptions.persister` or `persistOptions.buster` changes, the cache is restored again (see [Cache Busting](#cache-busting)), so create the `persister` once instead of on every render
 - `onSuccess?: () => Promise<unknown> | unknown`
   - optional
-  - will be called when the initial restore is finished
+  - will be called when a restore is finished
   - can be used to [resumePausedMutations](../reference/classes/QueryClient.md#resumepausedmutations)
   - if a Promise is returned, it will be awaited; restoring is seen as ongoing until then
 - `onError?: () => Promise<unknown> | unknown`

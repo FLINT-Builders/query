@@ -25,21 +25,25 @@ export const PersistQueryClientProvider = (
   }))
 
   createEffect(() => {
-    setIsRestoring(true)
-    persistQueryClientRestore(options())
-      .then(() => props.onSuccess?.())
-      .catch(() => props.onError?.())
-      .finally(() => {
-        setIsRestoring(false)
-      })
-  })
-
-  createEffect(() => {
+    const restoreOptions = options()
+    let isCurrent = true
     let unsubscribe = () => {}
-    if (!isRestoring()) {
-      unsubscribe = persistQueryClientSubscribe(options())
-    }
-    onCleanup(() => unsubscribe())
+    // Stop saving before the next restore starts, so the previous
+    // persister or buster never receives the next restore's data.
+    onCleanup(() => {
+      isCurrent = false
+      unsubscribe()
+    })
+
+    setIsRestoring(true)
+    persistQueryClientRestore(restoreOptions)
+      .then(() => (isCurrent ? props.onSuccess?.() : undefined))
+      .catch(() => (isCurrent ? props.onError?.() : undefined))
+      .finally(() => {
+        if (!isCurrent) return
+        setIsRestoring(false)
+        unsubscribe = persistQueryClientSubscribe(restoreOptions)
+      })
   })
 
   return (

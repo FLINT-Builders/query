@@ -1,4 +1,4 @@
-import { dehydrate, hydrate } from '@tanstack/query-core'
+import { dehydrate, hydrate, notifyManager } from '@tanstack/query-core'
 import type {
   DehydrateOptions,
   DehydratedState,
@@ -62,11 +62,44 @@ function isCacheEventType(eventType: NotifyEventType) {
   return cacheEventTypes.includes(eventType)
 }
 
+interface ClientRestore {
+  persister: Persister
+  buster: string
+}
+
+/**
+ * The persister and buster each QueryClient was last restored with.
+ * Restoring with a different one makes the previous restore stale and
+ * discards whatever it put into the client.
+ */
+const clientRestores = new WeakMap<QueryClient, ClientRestore>()
+
+/**
+ * Discards everything a previous restore may have put into the QueryClient.
+ * Queries are reset in place rather than removed, because mounted observers
+ * (including ones that unsubscribed while restoring) keep referencing them.
+ */
+function discardRestoredClient(queryClient: QueryClient) {
+  notifyManager.batch(() => {
+    queryClient
+      .getQueryCache()
+      .getAll()
+      .forEach((query) => {
+        query.reset()
+      })
+    queryClient.getMutationCache().clear()
+  })
+}
+
 /**
  * Restores persisted data to the QueryCache
  *  - data obtained from persister.restoreClient
  *  - data is hydrated using hydrateOptions
  * If data is expired, busted, empty, or throws, it runs persister.removeClient
+ *
+ * If the QueryClient was previously restored with a different persister or
+ * buster, its current data is discarded first, the previous restore is
+ * ignored when it settles, and stale active queries refetch afterwards.
  */
 export async function persistQueryClientRestore({
   queryClient,
@@ -75,8 +108,26 @@ export async function persistQueryClientRestore({
   buster = '',
   hydrateOptions,
 }: PersistedQueryClientRestoreOptions) {
+  const previousRestore = clientRestores.get(queryClient)
+  const isSameRestore =
+    previousRestore?.persister === persister &&
+    previousRestore.buster === buster
+  const restore: ClientRestore =
+    previousRestore && isSameRestore ? previousRestore : { persister, buster }
+  const discarded = previousRestore !== undefined && !isSameRestore
+  const isSuperseded = () => clientRestores.get(queryClient) !== restore
+
+  clientRestores.set(queryClient, restore)
+  if (discarded) {
+    discardRestoredClient(queryClient)
+  }
+
   try {
     const persistedClient = await persister.restoreClient()
+
+    if (isSuperseded()) {
+      return
+    }
 
     if (persistedClient) {
       if (persistedClient.timestamp) {
@@ -92,6 +143,10 @@ export async function persistQueryClientRestore({
       }
     }
   } catch (err) {
+    if (isSuperseded()) {
+      throw err
+    }
+
     if (process.env.NODE_ENV !== 'production') {
       console.error(err)
       console.warn(
@@ -102,6 +157,13 @@ export async function persistQueryClientRestore({
     await persister.removeClient()
 
     throw err
+  } finally {
+    if (discarded && !isSuperseded()) {
+      void queryClient.refetchQueries(
+        { type: 'active', stale: true },
+        { cancelRefetch: false },
+      )
+    }
   }
 }
 
