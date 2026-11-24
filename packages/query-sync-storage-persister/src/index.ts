@@ -58,24 +58,31 @@ export function createSyncStoragePersister({
         return error as Error
       }
     }
-    return {
-      persistClient: throttle((persistedClient) => {
-        let client: PersistedClient | undefined = persistedClient
-        let error = trySave(client)
-        let errorCount = 0
-        while (error && client) {
-          errorCount++
-          client = retry?.({
-            persistedClient: client,
-            error,
-            errorCount,
-          })
+    // Bumped by removeClient so a save captured before removal can never write
+    let generation = 0
+    const throttledSave = throttle((persistedClient: PersistedClient) => {
+      const saveGeneration = generation
+      let client: PersistedClient | undefined = persistedClient
+      let error = trySave(client)
+      let errorCount = 0
+      while (error && client) {
+        errorCount++
+        client = retry?.({
+          persistedClient: client,
+          error,
+          errorCount,
+        })
 
-          if (client) {
-            error = trySave(client)
-          }
+        if (client && saveGeneration === generation) {
+          error = trySave(client)
+        } else {
+          client = undefined
         }
-      }, throttleTime),
+      }
+    }, throttleTime)
+
+    return {
+      persistClient: throttledSave,
       restoreClient: () => {
         const cacheString = storage.getItem(key)
 
@@ -86,6 +93,8 @@ export function createSyncStoragePersister({
         return deserialize(cacheString)
       },
       removeClient: () => {
+        generation++
+        throttledSave.cancel()
         storage.removeItem(key)
       },
     }
@@ -103,14 +112,26 @@ function throttle<TArgs extends Array<any>>(
   wait = 100,
 ) {
   let timer: ManagedTimerId | null = null
-  let params: TArgs
-  return function (...args: TArgs) {
+  let params: TArgs | null = null
+  const throttled = function (...args: TArgs) {
     params = args
     if (timer === null) {
       timer = timeoutManager.setTimeout(() => {
-        func(...params)
+        const latestParams = params
+        params = null
         timer = null
+        if (latestParams) {
+          func(...latestParams)
+        }
       }, wait)
     }
   }
+  throttled.cancel = () => {
+    if (timer !== null) {
+      timeoutManager.clearTimeout(timer)
+      timer = null
+    }
+    params = null
+  }
+  return throttled
 }
