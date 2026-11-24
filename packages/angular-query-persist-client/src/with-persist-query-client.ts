@@ -70,12 +70,8 @@ export function withPersistQueryClient(
         const { onSuccess, onError, persistOptions } = persistQueryClientOptions
         const options = { queryClient, ...persistOptions }
         persistQueryClientRestore(options)
-          .then(() => {
-            onSuccess?.()
-          })
-          .catch(() => {
-            onError?.()
-          })
+          .then(() => onSuccess?.())
+          .catch(() => onError?.())
           .finally(() => {
             isRestoring.set(false)
             const cleanup = persistQueryClientSubscribe(options)
