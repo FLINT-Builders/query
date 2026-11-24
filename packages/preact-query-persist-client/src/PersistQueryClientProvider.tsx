@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import type { VNode } from 'preact'
 
 import {
-  persistQueryClientRestore,
+  persistQueryClientRestoreLatest,
   persistQueryClientSubscribe,
 } from '@tanstack/query-persist-client-core'
 import {
@@ -43,7 +43,8 @@ export const PersistQueryClientProvider = ({
     }
     if (!didRestore.current) {
       didRestore.current = true
-      persistQueryClientRestore(options)
+      const [, restorePromise] = persistQueryClientRestoreLatest(options)
+      restorePromise
         .then(() => refs.current.onSuccess?.())
         .catch(() => refs.current.onError?.())
         .finally(() => {

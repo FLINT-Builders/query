@@ -1,6 +1,7 @@
 <script lang="ts">
+  import { untrack } from 'svelte'
   import {
-    persistQueryClientRestore,
+    persistQueryClientRestoreLatest,
     persistQueryClientSubscribe,
   } from '@tanstack/query-persist-client-core'
   import {
@@ -37,17 +38,30 @@
   })
 
   $effect(() => {
-    return isRestoring.current ? () => {} : persistQueryClientSubscribe(options)
-  })
+    const restoreOptions = options
+    let active = true
+    let unsubscribe: (() => void) | undefined
 
-  $effect(() => {
-    isRestoring.current = true
-    persistQueryClientRestore(options)
-      .then(() => props.onSuccess?.())
-      .catch(() => props.onError?.())
-      .finally(() => {
-        isRestoring.current = false
-      })
+    untrack(() => {
+      isRestoring.current = true
+      const [isLatest, restorePromise] =
+        persistQueryClientRestoreLatest(restoreOptions)
+      restorePromise
+        .then(() => (active ? props.onSuccess?.() : undefined))
+        .catch(() => (active ? props.onError?.() : undefined))
+        .finally(() => {
+          if (!active) return
+          if (isLatest()) {
+            unsubscribe = persistQueryClientSubscribe(restoreOptions)
+          }
+          isRestoring.current = false
+        })
+    })
+
+    return () => {
+      active = false
+      unsubscribe?.()
+    }
   })
 </script>
 

@@ -2,7 +2,7 @@
 import * as React from 'react'
 
 import {
-  persistQueryClientRestore,
+  persistQueryClientRestoreLatest,
   persistQueryClientSubscribe,
 } from '@tanstack/query-persist-client-core'
 import { IsRestoringProvider, QueryClientProvider } from '@tanstack/react-query'
@@ -37,7 +37,8 @@ export const PersistQueryClientProvider = ({
     }
     if (!didRestore.current) {
       didRestore.current = true
-      persistQueryClientRestore(options)
+      const [, restorePromise] = persistQueryClientRestoreLatest(options)
+      restorePromise
         .then(() => refs.current.onSuccess?.())
         .catch(() => refs.current.onError?.())
         .finally(() => {

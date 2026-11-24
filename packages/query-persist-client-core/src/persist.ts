@@ -62,21 +62,71 @@ function isCacheEventType(eventType: NotifyEventType) {
   return cacheEventTypes.includes(eventType)
 }
 
+interface RestoreTarget {
+  persister: Persister
+  buster: string
+}
+
+const latestRestores = new WeakMap<QueryClient, RestoreTarget>()
+
 /**
  * Restores persisted data to the QueryCache
  *  - data obtained from persister.restoreClient
  *  - data is hydrated using hydrateOptions
  * If data is expired, busted, empty, or throws, it runs persister.removeClient
  */
-export async function persistQueryClientRestore({
-  queryClient,
-  persister,
-  maxAge = 1000 * 60 * 60 * 24,
-  buster = '',
-  hydrateOptions,
-}: PersistedQueryClientRestoreOptions) {
+export async function persistQueryClientRestore(
+  options: PersistedQueryClientRestoreOptions,
+) {
+  return restore(options, () => true)
+}
+
+/**
+ * Restores persisted data like `persistQueryClientRestore`, for a QueryClient
+ * that is persisted for one persister and buster at a time:
+ *  - If the client was last restored this way for a different persister or
+ *    buster, it is cleared first, so that cache cannot be saved under the new one
+ *  - If a newer restore starts for the same client before this one finishes,
+ *    this one neither hydrates nor removes the persisted cache
+ * @returns a function that tells whether this is still the latest restore for
+ * the client, and the restore promise
+ */
+export function persistQueryClientRestoreLatest(
+  options: PersistedQueryClientRestoreOptions,
+): [isLatest: () => boolean, restorePromise: Promise<void>] {
+  const { queryClient, persister, buster = '' } = options
+  const previous = latestRestores.get(queryClient)
+  const target: RestoreTarget = { persister, buster }
+  latestRestores.set(queryClient, target)
+
+  if (
+    previous &&
+    (previous.persister !== persister || previous.buster !== buster)
+  ) {
+    queryClient.clear()
+  }
+
+  const isLatest = () => latestRestores.get(queryClient) === target
+
+  return [isLatest, restore(options, isLatest)]
+}
+
+async function restore(
+  {
+    queryClient,
+    persister,
+    maxAge = 1000 * 60 * 60 * 24,
+    buster = '',
+    hydrateOptions,
+  }: PersistedQueryClientRestoreOptions,
+  isLatest: () => boolean,
+) {
   try {
     const persistedClient = await persister.restoreClient()
+
+    if (!isLatest()) {
+      return
+    }
 
     if (persistedClient) {
       if (persistedClient.timestamp) {
@@ -92,6 +142,10 @@ export async function persistQueryClientRestore({
       }
     }
   } catch (err) {
+    if (!isLatest()) {
+      return
+    }
+
     if (process.env.NODE_ENV !== 'production') {
       console.error(err)
       console.warn(
@@ -168,8 +222,9 @@ export function persistQueryClient(
   }
 
   // Attempt restore
-  const restorePromise = persistQueryClientRestore(props).then(() => {
-    if (!hasUnsubscribed) {
+  const [isLatest, latestRestore] = persistQueryClientRestoreLatest(props)
+  const restorePromise = latestRestore.then(() => {
+    if (!hasUnsubscribed && isLatest()) {
       // Subscribe to changes in the query cache to trigger the save
       persistQueryClientUnsubscribe = persistQueryClientSubscribe(props)
     }

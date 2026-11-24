@@ -12,7 +12,7 @@ import {
 } from '@angular/core'
 import { isPlatformBrowser } from '@angular/common'
 import {
-  persistQueryClientRestore,
+  persistQueryClientRestoreLatest,
   persistQueryClientSubscribe,
 } from '@tanstack/query-persist-client-core'
 import type { PersistQueryClientOptions as PersistQueryClientOptionsCore } from '@tanstack/query-persist-client-core'
@@ -69,7 +69,9 @@ export function withPersistQueryClient(
 
         const { onSuccess, onError, persistOptions } = persistQueryClientOptions
         const options = { queryClient, ...persistOptions }
-        persistQueryClientRestore(options)
+        const [isLatest, restorePromise] =
+          persistQueryClientRestoreLatest(options)
+        restorePromise
           .then(() => {
             onSuccess?.()
           })
@@ -78,6 +80,7 @@ export function withPersistQueryClient(
           })
           .finally(() => {
             isRestoring.set(false)
+            if (!isLatest()) return
             const cleanup = persistQueryClientSubscribe(options)
             destroyRef.onDestroy(cleanup)
           })
