@@ -58,24 +58,26 @@ export function createSyncStoragePersister({
         return error as Error
       }
     }
-    return {
-      persistClient: throttle((persistedClient) => {
-        let client: PersistedClient | undefined = persistedClient
-        let error = trySave(client)
-        let errorCount = 0
-        while (error && client) {
-          errorCount++
-          client = retry?.({
-            persistedClient: client,
-            error,
-            errorCount,
-          })
+    const throttledPersist = throttle((persistedClient: PersistedClient) => {
+      let client: PersistedClient | undefined = persistedClient
+      let error = trySave(client)
+      let errorCount = 0
+      while (error && client) {
+        errorCount++
+        client = retry?.({
+          persistedClient: client,
+          error,
+          errorCount,
+        })
 
-          if (client) {
-            error = trySave(client)
-          }
+        if (client) {
+          error = trySave(client)
         }
-      }, throttleTime),
+      }
+    }, throttleTime)
+
+    return {
+      persistClient: throttledPersist,
       restoreClient: () => {
         const cacheString = storage.getItem(key)
 
@@ -86,6 +88,7 @@ export function createSyncStoragePersister({
         return deserialize(cacheString)
       },
       removeClient: () => {
+        throttledPersist.cancel()
         storage.removeItem(key)
       },
     }
@@ -104,7 +107,7 @@ function throttle<TArgs extends Array<any>>(
 ) {
   let timer: ManagedTimerId | null = null
   let params: TArgs
-  return function (...args: TArgs) {
+  const throttled = function (...args: TArgs) {
     params = args
     if (timer === null) {
       timer = timeoutManager.setTimeout(() => {
@@ -113,4 +116,11 @@ function throttle<TArgs extends Array<any>>(
       }, wait)
     }
   }
+  throttled.cancel = () => {
+    if (timer !== null) {
+      timeoutManager.clearTimeout(timer)
+      timer = null
+    }
+  }
+  return throttled
 }
