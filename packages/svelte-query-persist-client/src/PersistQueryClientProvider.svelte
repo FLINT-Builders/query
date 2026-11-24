@@ -37,17 +37,26 @@
   })
 
   $effect(() => {
-    return isRestoring.current ? () => {} : persistQueryClientSubscribe(options)
-  })
+    const restoreOptions = options
+    let isCurrent = true
+    let unsubscribe = () => {}
 
-  $effect(() => {
     isRestoring.current = true
-    persistQueryClientRestore(options)
-      .then(() => props.onSuccess?.())
-      .catch(() => props.onError?.())
+    persistQueryClientRestore(restoreOptions)
+      .then(() => (isCurrent ? props.onSuccess?.() : undefined))
+      .catch(() => (isCurrent ? props.onError?.() : undefined))
       .finally(() => {
+        if (!isCurrent) return
         isRestoring.current = false
+        unsubscribe = persistQueryClientSubscribe(restoreOptions)
       })
+
+    // Stop saving before the next restore starts, so the previous
+    // persister or buster never receives the next restore's data.
+    return () => {
+      isCurrent = false
+      unsubscribe()
+    }
   })
 </script>
 
