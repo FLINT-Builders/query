@@ -255,7 +255,9 @@ export class Query<
     this.queryKey = config.queryKey
     this.queryHash = config.queryHash
     this.#initialState = getDefaultState(this.options)
-    this.state = config.state ?? this.#initialState
+    this.state = config.state
+      ? clampDataUpdatedAt(config.state)
+      : this.#initialState
     this.scheduleGc()
   }
   /**
@@ -885,7 +887,7 @@ export class Query<
         case 'setState':
           return {
             ...state,
-            ...action.state,
+            ...clampDataUpdatedAt(action.state),
           }
       }
     }
@@ -925,10 +927,23 @@ export function fetchState<
   } as const
 }
 
+// `dataUpdatedAt` can come from restored snapshots, broadcasts or callers.
+// One ahead of the clock would keep the data fresh until that time is reached,
+// regardless of `staleTime`, so it is recorded as the current time instead.
+function clampDataUpdatedAt<TState extends { dataUpdatedAt?: number }>(
+  state: TState,
+): TState {
+  const now = Date.now()
+  return state.dataUpdatedAt !== undefined && state.dataUpdatedAt > now
+    ? { ...state, dataUpdatedAt: now }
+    : state
+}
+
 function successState<TData>(data: TData | undefined, dataUpdatedAt?: number) {
+  const now = Date.now()
   return {
     data,
-    dataUpdatedAt: dataUpdatedAt ?? Date.now(),
+    dataUpdatedAt: Math.min(dataUpdatedAt ?? now, now),
     error: null,
     isInvalidated: false,
     status: 'success' as const,
@@ -956,10 +971,12 @@ function getDefaultState<
       : options.initialDataUpdatedAt
     : 0
 
+  const now = Date.now()
+
   return {
     data,
     dataUpdateCount: 0,
-    dataUpdatedAt: hasData ? (initialDataUpdatedAt ?? Date.now()) : 0,
+    dataUpdatedAt: hasData ? Math.min(initialDataUpdatedAt ?? now, now) : 0,
     error: null,
     errorUpdateCount: 0,
     errorUpdatedAt: 0,
