@@ -151,7 +151,8 @@ export function broadcastQueryClient({
     }
 
     tx(() => {
-      const { type, queryHash, queryKey, state } = action
+      const { type, queryKey, state } = action
+      const queryHash = queryClient.defaultQueryOptions({ queryKey }).queryHash
 
       const query = queryCache.get(queryHash)
 
