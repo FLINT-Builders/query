@@ -186,18 +186,48 @@ export function experimental_createQueryPersister<TStorageValue = string>({
     }
   }
 
-  async function persistQuery(query: Query) {
-    if (storage != null) {
-      const storageKey = `${prefix}-${query.queryHash}`
-      storage.setItem(
-        storageKey,
-        await serialize({
+  interface PendingPersist {
+    queryHash: string
+    queryKey: QueryKey
+    cancelled: boolean
+  }
+
+  // Writes requested but not yet handed to storage; removeQueries cancels the
+  // matching ones so a write captured before removal cannot restore the entry
+  const pendingPersists = new Set<PendingPersist>()
+
+  function trackPersist(query: Query): PendingPersist {
+    const pending: PendingPersist = {
+      queryHash: query.queryHash,
+      queryKey: query.queryKey,
+      cancelled: false,
+    }
+    pendingPersists.add(pending)
+    return pending
+  }
+
+  async function writeQuery(query: Query, pending: PendingPersist) {
+    try {
+      if (storage != null) {
+        const storageKey = `${prefix}-${query.queryHash}`
+        const serialized = await serialize({
           state: query.state,
           queryKey: query.queryKey,
           queryHash: query.queryHash,
           buster: buster,
-        }),
-      )
+        })
+        if (!pending.cancelled) {
+          storage.setItem(storageKey, serialized)
+        }
+      }
+    } finally {
+      pendingPersists.delete(pending)
+    }
+  }
+
+  async function persistQuery(query: Query) {
+    if (storage != null) {
+      await writeQuery(query, trackPersist(query))
     }
   }
 
@@ -238,8 +268,9 @@ export function experimental_createQueryPersister<TStorageValue = string>({
 
     if (matchesFilter && storage != null) {
       // Persist if we have storage defined, we use timeout to get proper state to be persisted
+      const pending = trackPersist(query)
       notifyManager.schedule(() => {
-        persistQuery(query)
+        writeQuery(query, pending)
       })
     }
 
@@ -326,6 +357,18 @@ export function experimental_createQueryPersister<TStorageValue = string>({
     const { exact, queryKey } = filters
 
     if (storage?.entries) {
+      for (const pending of pendingPersists) {
+        if (
+          !queryKey ||
+          (exact
+            ? pending.queryHash === hashKey(queryKey)
+            : partialMatchKey(pending.queryKey, queryKey))
+        ) {
+          pending.cancelled = true
+          pendingPersists.delete(pending)
+        }
+      }
+
       const entries = await storage.entries()
       const storageKeyPrefix = `${prefix}-`
       for (const [key, value] of entries) {
