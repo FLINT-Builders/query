@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { useHydrate } from './useHydrate.js'
+  import { useHydrate } from './useHydrate.svelte.js'
   import type { Snippet } from 'svelte'
   import type {
     DehydratedState,
@@ -21,7 +21,11 @@
     queryClient = undefined,
   }: Props = $props()
 
-  useHydrate(state, options, queryClient)
+  useHydrate(
+    () => state,
+    () => options,
+    () => queryClient,
+  )
 </script>
 
 {@render children()}
