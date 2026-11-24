@@ -13,7 +13,7 @@ This utility comes as a separate package and is available under the `'@tanstack/
 
 ## Usage
 
-Import the `broadcastQueryClient` function, and pass it your `QueryClient` instance, and optionally, set a `broadcastChannel`.
+Import the `broadcastQueryClient` function, and pass it your `QueryClient` instance and a `broadcastChannel` name specific to your app.
 
 ```tsx
 import { broadcastQueryClient } from '@tanstack/query-broadcast-client-experimental'
@@ -30,7 +30,7 @@ broadcastQueryClient({
 
 ### `broadcastQueryClient`
 
-Pass this function a `QueryClient` instance and optionally, a `broadcastChannel`.
+Pass this function a `QueryClient` instance and a `broadcastChannel` name. It throws if `broadcastChannel` is missing or empty.
 
 ```tsx
 broadcastQueryClient({ queryClient, broadcastChannel })
@@ -46,7 +46,7 @@ interface BroadcastQueryClientOptions {
   queryClient: QueryClient
   /** This is the unique channel name that will be used
    * to communicate between tabs and windows */
-  broadcastChannel?: string
+  broadcastChannel: string
   /** Options for the BroadcastChannel API */
   options?: BroadcastChannelOptions
   /**
@@ -72,13 +72,18 @@ interface BroadcastErrorEvent {
 }
 ```
 
-The default options are:
+## Security
 
-```tsx
-{
-  broadcastChannel = 'tanstack-query',
-}
-```
+Any document on the same origin can post to a broadcast channel whose name it knows, including pages that do not use this plugin. Messages on your channel are written into this tab's cache, so:
+
+- Choose a `broadcastChannel` name specific to your app. There is no default name.
+- Do not serve unrelated or untrusted content from the same origin as your app.
+
+Incoming messages are checked before they are applied:
+
+- A message is dropped unless its `queryHash` is the hash of its `queryKey`, computed with the query's `queryKeyHashFn`.
+- Only query state fields such as `data`, `error`, `status`, and their timestamps and counters are applied. `fetchStatus` and `fetchMeta` are never taken from a message.
+- A `removed` message is ignored while the query still has observers in this tab.
 
 ## Handling broadcast errors
 
