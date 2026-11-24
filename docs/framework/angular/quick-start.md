@@ -19,7 +19,10 @@ import {
 } from '@tanstack/angular-query-experimental'
 
 bootstrapApplication(AppComponent, {
-  providers: [provideHttpClient(), provideTanStackQuery(new QueryClient())],
+  providers: [
+    provideHttpClient(),
+    provideTanStackQuery(() => new QueryClient()),
+  ],
 })
 ```
 
@@ -35,11 +38,13 @@ import {
 @NgModule({
   declarations: [AppComponent],
   imports: [BrowserModule],
-  providers: [provideTanStackQuery(new QueryClient())],
+  providers: [provideTanStackQuery(() => new QueryClient())],
   bootstrap: [AppComponent],
 })
 export class AppModule {}
 ```
+
+Passing a factory creates the `QueryClient` when the application starts. With server-side rendering, every request bootstraps a new application, so the factory gives each request its own cache. On the server, a `QueryClient` instance can only be used by one application at a time and is cleared when that application is destroyed, so do not share an instance created at module scope between requests.
 
 ### Component with query and mutation
 
