@@ -287,9 +287,16 @@ export function hashKey(queryKey: QueryKey | MutationKey): string {
       ? Object.keys(val)
           .sort()
           .reduce((result, key) => {
-            result[key] = val[key]
+            // Plain assignment would let a `__proto__` key reach the prototype
+            // setter and drop out of the hash.
+            Object.defineProperty(result, key, {
+              value: val[key],
+              enumerable: true,
+              writable: true,
+              configurable: true,
+            })
             return result
-          }, {} as any)
+          }, Object.create(null))
       : val,
   )
 }
