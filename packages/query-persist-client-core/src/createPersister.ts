@@ -123,10 +123,36 @@ export function experimental_createQueryPersister<TStorageValue = string>({
     return true
   }
 
-  async function retrieveQuery<T>(
+  const storageKeyPrefix = `${prefix}-`
+
+  /**
+   * The storage key is the only trusted identity of a persisted entry.
+   * The `queryKey` saved inside the entry is trusted only when it hashes back
+   * to the hash that the storage key was built from.
+   */
+  function isStoredUnderOwnKey(
+    persistedQuery: PersistedQuery,
+    queryHash: string,
+    hashQueryKey: (queryKey: QueryKey) => string,
+  ) {
+    return (
+      Array.isArray(persistedQuery.queryKey) &&
+      hashQueryKey(persistedQuery.queryKey) === queryHash
+    )
+  }
+
+  function retrieveQuery<T>(
     queryHash: string,
     afterRestoreMacroTask?: (persistedQuery: PersistedQuery) => void,
   ) {
+    return retrievePersistedQuery<T>(queryHash, hashKey, afterRestoreMacroTask)
+  }
+
+  async function retrievePersistedQuery<T>(
+    queryHash: string,
+    hashQueryKey: (queryKey: QueryKey) => string,
+    afterRestoreMacroTask?: (persistedQuery: PersistedQuery) => void,
+  ): Promise<T | undefined> {
     if (storage != null) {
       const storageKey = `${prefix}-${queryHash}`
       try {
@@ -140,7 +166,15 @@ export function experimental_createQueryPersister<TStorageValue = string>({
             return
           }
 
-          if (isExpiredOrBusted(persistedQuery)) {
+          // Entries without a saved query key are only ever returned for the
+          // query hash that was asked for, so they are still accepted here.
+          const { queryKey: savedQueryKey } =
+            persistedQuery as Partial<PersistedQuery>
+          if (
+            isExpiredOrBusted(persistedQuery) ||
+            (savedQueryKey !== undefined &&
+              !isStoredUnderOwnKey(persistedQuery, queryHash, hashQueryKey))
+          ) {
             await storage.removeItem(storageKey)
           } else {
             if (afterRestoreMacroTask) {
@@ -210,8 +244,9 @@ export function experimental_createQueryPersister<TStorageValue = string>({
 
     // Try to restore only if we do not have any data in the cache and we have persister defined
     if (matchesFilter && query.state.data === undefined && storage != null) {
-      const restoredData = await retrieveQuery(
+      const restoredData = await retrievePersistedQuery(
         query.queryHash,
+        query.options.queryKeyHashFn ?? hashKey,
         (persistedQuery: PersistedQuery) => {
           // Set proper updatedAt, since resolving in the first pass overrides those values
           query.setState({
@@ -248,7 +283,6 @@ export function experimental_createQueryPersister<TStorageValue = string>({
 
   async function persisterGc() {
     if (storage?.entries) {
-      const storageKeyPrefix = `${prefix}-`
       const entries = await storage.entries()
       for (const [key, value] of entries) {
         if (key.startsWith(storageKeyPrefix)) {
@@ -278,10 +312,12 @@ export function experimental_createQueryPersister<TStorageValue = string>({
     const { exact, queryKey } = filters
 
     if (storage?.entries) {
-      const storageKeyPrefix = `${prefix}-`
+      const hashQueryKey = (key: QueryKey) =>
+        queryClient.defaultQueryOptions({ queryKey: key }).queryHash
       const entries = await storage.entries()
       for (const [key, value] of entries) {
         if (key.startsWith(storageKeyPrefix)) {
+          const queryHash = key.slice(storageKeyPrefix.length)
           let persistedQuery: PersistedQuery
           try {
             persistedQuery = await deserialize(value)
@@ -294,9 +330,13 @@ export function experimental_createQueryPersister<TStorageValue = string>({
             continue
           }
 
+          if (!isStoredUnderOwnKey(persistedQuery, queryHash, hashQueryKey)) {
+            continue
+          }
+
           if (queryKey) {
             if (exact) {
-              if (persistedQuery.queryHash !== hashKey(queryKey)) {
+              if (queryHash !== hashQueryKey(queryKey)) {
                 continue
               }
             } else if (!partialMatchKey(persistedQuery.queryKey, queryKey)) {
@@ -327,7 +367,6 @@ export function experimental_createQueryPersister<TStorageValue = string>({
 
     if (storage?.entries) {
       const entries = await storage.entries()
-      const storageKeyPrefix = `${prefix}-`
       for (const [key, value] of entries) {
         if (key.startsWith(storageKeyPrefix)) {
           if (!queryKey) {
@@ -335,6 +374,7 @@ export function experimental_createQueryPersister<TStorageValue = string>({
             continue
           }
 
+          const queryHash = key.slice(storageKeyPrefix.length)
           let persistedQuery: PersistedQuery
           try {
             persistedQuery = await deserialize(value)
@@ -344,10 +384,15 @@ export function experimental_createQueryPersister<TStorageValue = string>({
           }
 
           if (exact) {
-            if (persistedQuery.queryHash !== hashKey(queryKey)) {
+            if (queryHash !== hashKey(queryKey)) {
               continue
             }
-          } else if (!partialMatchKey(persistedQuery.queryKey, queryKey)) {
+          } else if (
+            // An entry whose saved query key does not belong to its storage
+            // key cannot be attributed to any query, so it is never spared.
+            isStoredUnderOwnKey(persistedQuery, queryHash, hashKey) &&
+            !partialMatchKey(persistedQuery.queryKey, queryKey)
+          ) {
             continue
           }
 
