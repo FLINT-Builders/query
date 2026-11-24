@@ -59,6 +59,26 @@ function reconcileFn<TData, TError>(
   return { ...result, data: newData } as typeof result
 }
 
+type ShouldRedactErrors = ((error: unknown) => boolean) | undefined
+
+/**
+ * Anything the server resource resolves or rejects with is serialized into the HTML,
+ * so errors are replaced with a generic one unless `dehydrate.shouldRedactErrors`
+ * returns `false` for them, matching how `dehydrate` treats pending query rejections.
+ */
+const redactServerError = <TError>(
+  error: TError,
+  shouldRedactErrors: ShouldRedactErrors,
+): TError => {
+  if (!isServer || error == null || shouldRedactErrors?.(error) === false) {
+    return error
+  }
+  const redacted = new Error('redacted')
+  // The stack is an own property that gets serialized and would expose server paths
+  redacted.stack = `${redacted.name}: ${redacted.message}`
+  return redacted as TError
+}
+
 /**
  * Solid's `onHydrated` functionality will silently "fail" (hydrate with an empty object)
  * if the resource data is not serializable.
@@ -72,10 +92,17 @@ const hydratableObserverResult = <
 >(
   query: Query<TQueryFnData, TError, TData, TQueryKey>,
   result: QueryObserverResult<TDataHydratable, TError>,
+  shouldRedactErrors: ShouldRedactErrors,
 ) => {
   if (!isServer) return result
+  const unwrapped = unwrap(result)
   const obj: any = {
-    ...unwrap(result),
+    ...unwrapped,
+    error: redactServerError(unwrapped.error, shouldRedactErrors),
+    failureReason: redactServerError(
+      unwrapped.failureReason,
+      shouldRedactErrors,
+    ),
     // During SSR, functions cannot be serialized, so we need to remove them
     // This is safe because we will add these functions back when the query is hydrated
     refetch: undefined,
@@ -90,7 +117,14 @@ const hydratableObserverResult = <
   // We will also attach the dehydrated state of the query to the result
   // This will be removed on client after hydration
   obj.hydrationData = {
-    state: query.state,
+    state: {
+      ...query.state,
+      error: redactServerError(query.state.error, shouldRedactErrors),
+      fetchFailureReason: redactServerError(
+        query.state.fetchFailureReason,
+        shouldRedactErrors,
+      ),
+    },
     queryKey: query.queryKey,
     queryHash: query.queryHash,
     ...(query.meta && { meta: query.meta }),
@@ -124,6 +158,9 @@ export function useBaseQuery<
   // before the resource has loaded
   let unsubscribeQueued = false
 
+  const shouldRedactErrors = () =>
+    client().getDefaultOptions().dehydrate?.shouldRedactErrors
+
   const defaultedOptions = createMemo(() => {
     const defaultOptions = client().defaultQueryOptions(options())
     defaultOptions._optimisticResults = isRestoring()
@@ -155,7 +192,11 @@ export function useBaseQuery<
     return observer().subscribe((result) => {
       notifyManager.batchCalls(() => {
         const query = observer().getCurrentQuery()
-        const unwrappedResult = hydratableObserverResult(query, result)
+        const unwrappedResult = hydratableObserverResult(
+          query,
+          result,
+          shouldRedactErrors(),
+        )
 
         if (result.data !== undefined && unwrappedResult.isError) {
           reject(unwrappedResult.error)
@@ -256,12 +297,18 @@ export function useBaseQuery<
           ])
         ) {
           setStateWithReconciliation(observerResult)
-          return reject(observerResult.error)
+          return reject(
+            redactServerError(observerResult.error, shouldRedactErrors()),
+          )
         }
         if (!observerResult.isLoading) {
           resolver = null
           return resolve(
-            hydratableObserverResult(obs.getCurrentQuery(), observerResult),
+            hydratableObserverResult(
+              obs.getCurrentQuery(),
+              observerResult,
+              shouldRedactErrors(),
+            ),
           )
         }
 
