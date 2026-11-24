@@ -4,23 +4,26 @@ title: provideTanStackQuery
 ---
 
 ```ts
-function provideTanStackQuery(queryClient: 
-  | QueryClient
-  | InjectionToken<QueryClient>, ...features: QueryFeatures[]): Provider[];
+function provideTanStackQuery(queryClient: QueryClientProviderValue, ...features: QueryFeatures[]): Provider[];
 ```
 
-Defined in: [packages/angular-query-experimental/src/providers.ts:102](https://github.com/TanStack/query/blob/main/packages/angular-query-experimental/src/providers.ts#L102)
+Defined in: [packages/angular-query-experimental/src/providers.ts:157](https://github.com/TanStack/query/blob/main/packages/angular-query-experimental/src/providers.ts#L157)
 
 Sets up providers necessary to enable TanStack Query functionality for Angular applications. Allows
 configuring a `QueryClient` and optional features such as developer tools.
+
+Pass a factory such as `() => new QueryClient()` so that every application, and with server-side rendering
+every request, gets its own `QueryClient`. On the server, a `QueryClient` instance can only be used by one
+application at a time, and its cache is cleared when that application is destroyed.
 
 ## Parameters
 
 ### queryClient
 
-A `QueryClient` instance, or an `InjectionToken` which provides a `QueryClient`.
+[`QueryClientProviderValue`](../type-aliases/QueryClientProviderValue.md)
 
-[`QueryClient`](../classes/QueryClient.md) | `InjectionToken`\<[`QueryClient`](../classes/QueryClient.md)\>
+A factory function which creates a `QueryClient`, a `QueryClient` instance, or an
+`InjectionToken` which provides a `QueryClient`.
 
 ### features
 
@@ -45,7 +48,7 @@ A set of providers to set up TanStack Query.
 import { provideTanStackQuery, QueryClient } from '@tanstack/angular-query-experimental'
 
 bootstrapApplication(AppComponent, {
-  providers: [provideTanStackQuery(new QueryClient())],
+  providers: [provideTanStackQuery(() => new QueryClient())],
 })
 ```
 
@@ -56,7 +59,7 @@ import { provideTanStackQuery, QueryClient } from '@tanstack/angular-query-exper
 @NgModule({
   declarations: [AppComponent],
   imports: [BrowserModule],
-  providers: [provideTanStackQuery(new QueryClient())],
+  providers: [provideTanStackQuery(() => new QueryClient())],
   bootstrap: [AppComponent],
 })
 export class AppModule {}
@@ -72,7 +75,7 @@ import {
 } from '@tanstack/angular-query-experimental'
 
 bootstrapApplication(AppComponent, {
-  providers: [provideTanStackQuery(new QueryClient(), withDevtools())],
+  providers: [provideTanStackQuery(() => new QueryClient(), withDevtools())],
 })
 ```
 

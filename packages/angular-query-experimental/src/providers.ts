@@ -1,13 +1,58 @@
-import { DestroyRef, InjectionToken, inject } from '@angular/core'
+import {
+  ApplicationRef,
+  DestroyRef,
+  InjectionToken,
+  PLATFORM_ID,
+  inject,
+} from '@angular/core'
+import { isPlatformServer } from '@angular/common'
 import { QueryClient } from '@tanstack/query-core'
 import type { Provider } from '@angular/core'
+
+/**
+ * A `QueryClient` instance, an `InjectionToken` which provides a `QueryClient`, or a factory function which
+ * creates a new `QueryClient`. The factory runs in an injection context once per injector the provider is
+ * added to, so with server-side rendering every request gets its own `QueryClient`.
+ */
+export type QueryClientProviderValue =
+  | QueryClient
+  | InjectionToken<QueryClient>
+  | (() => QueryClient)
+
+// Each server request bootstraps its own application. A `QueryClient` holds one cache, so on the server it
+// may only serve one live application at a time, and its cache is cleared before another one can use it.
+const serverApplications = new WeakMap<QueryClient, ApplicationRef>()
+
+function bindToServerApplication(
+  client: QueryClient,
+  application: ApplicationRef,
+): void {
+  const owner = serverApplications.get(client)
+  if (owner === application) return
+  if (owner) {
+    throw new Error(
+      'This QueryClient is already used by another server-rendered application. Sharing one QueryClient ' +
+        'between server requests exposes cached query data from one request to another. Create a new ' +
+        'QueryClient per application instead, for example provideTanStackQuery(() => new QueryClient()).',
+    )
+  }
+  serverApplications.set(client, application)
+  application.onDestroy(() => {
+    client.clear()
+    serverApplications.delete(client)
+  })
+}
 
 /**
  * Usually {@link provideTanStackQuery} is used once to set up TanStack Query and the
  * [`QueryClient`](https://tanstack.com/query/latest/docs/reference/QueryClient) for the entire application —
  * it calls `provideQueryClient` internally. Use `provideQueryClient` directly to provide a different
  * `QueryClient` instance for part of the application, or for unit testing.
- * @param queryClient - A `QueryClient` instance, or an `InjectionToken` which provides a `QueryClient`.
+ *
+ * On the server, a `QueryClient` can only be used by one application at a time, and its cache is cleared when
+ * that application is destroyed. Pass a factory so every server request gets its own `QueryClient`.
+ * @param queryClient - A factory function which creates a `QueryClient`, a `QueryClient` instance, or an
+ * `InjectionToken` which provides a `QueryClient`.
  * @returns A provider object that can be used to provide the `QueryClient` instance.
  *
  * @example
@@ -15,12 +60,12 @@ import type { Provider } from '@angular/core'
  * defaults:
  * ```ts
  * TestBed.configureTestingModule({
- *   providers: [provideQueryClient(new QueryClient())],
+ *   providers: [provideQueryClient(() => new QueryClient())],
  * })
  * ```
  */
 export function provideQueryClient(
-  queryClient: QueryClient | InjectionToken<QueryClient>,
+  queryClient: QueryClientProviderValue,
 ): Provider {
   return {
     provide: QueryClient,
@@ -28,7 +73,12 @@ export function provideQueryClient(
       const client =
         queryClient instanceof InjectionToken
           ? inject(queryClient)
-          : queryClient
+          : typeof queryClient === 'function'
+            ? queryClient()
+            : queryClient
+      if (isPlatformServer(inject(PLATFORM_ID))) {
+        bindToServerApplication(client, inject(ApplicationRef))
+      }
       // Unmount the query client on injector destroy
       inject(DestroyRef).onDestroy(() => client.unmount())
       client.mount()
@@ -41,9 +91,14 @@ export function provideQueryClient(
  * Sets up providers necessary to enable TanStack Query functionality for Angular applications. Allows
  * configuring a `QueryClient` and optional features such as developer tools.
  *
+ * Pass a factory such as `() => new QueryClient()` so that every application, and with server-side rendering
+ * every request, gets its own `QueryClient`. On the server, a `QueryClient` instance can only be used by one
+ * application at a time, and its cache is cleared when that application is destroyed.
+ *
  * @see https://tanstack.com/query/v5/docs/framework/angular/quick-start
  * @see {@link withDevtools}
- * @param queryClient - A `QueryClient` instance, or an `InjectionToken` which provides a `QueryClient`.
+ * @param queryClient - A factory function which creates a `QueryClient`, a `QueryClient` instance, or an
+ * `InjectionToken` which provides a `QueryClient`.
  * @param features - Optional features to configure additional Query functionality.
  * @returns A set of providers to set up TanStack Query.
  *
@@ -52,7 +107,7 @@ export function provideQueryClient(
  * import { provideTanStackQuery, QueryClient } from '@tanstack/angular-query-experimental'
  *
  * bootstrapApplication(AppComponent, {
- *   providers: [provideTanStackQuery(new QueryClient())],
+ *   providers: [provideTanStackQuery(() => new QueryClient())],
  * })
  * ```
  *
@@ -64,7 +119,7 @@ export function provideQueryClient(
  * @NgModule({
  *   declarations: [AppComponent],
  *   imports: [BrowserModule],
- *   providers: [provideTanStackQuery(new QueryClient())],
+ *   providers: [provideTanStackQuery(() => new QueryClient())],
  *   bootstrap: [AppComponent],
  * })
  * export class AppModule {}
@@ -81,7 +136,7 @@ export function provideQueryClient(
  * } from '@tanstack/angular-query-experimental'
  *
  * bootstrapApplication(AppComponent, {
- *   providers: [provideTanStackQuery(new QueryClient(), withDevtools())],
+ *   providers: [provideTanStackQuery(() => new QueryClient(), withDevtools())],
  * })
  * ```
  *
@@ -100,7 +155,7 @@ export function provideQueryClient(
  * ```
  */
 export function provideTanStackQuery(
-  queryClient: QueryClient | InjectionToken<QueryClient>,
+  queryClient: QueryClientProviderValue,
   ...features: Array<QueryFeatures>
 ): Array<Provider> {
   return [

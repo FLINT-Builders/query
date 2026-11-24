@@ -148,6 +148,7 @@ title: "@tanstack/angular-query-experimental"
 - [QueriesResults](type-aliases/QueriesResults.md)
 - [QueryBooleanOption](type-aliases/QueryBooleanOption.md)
 - [QueryCacheNotifyEvent](type-aliases/QueryCacheNotifyEvent.md)
+- [QueryClientProviderValue](type-aliases/QueryClientProviderValue.md)
 - [QueryFeatures](type-aliases/QueryFeatures.md)
 - [QueryFunction](type-aliases/QueryFunction.md)
 - [QueryFunctionContext](type-aliases/QueryFunctionContext.md)

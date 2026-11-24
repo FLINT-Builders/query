@@ -49,6 +49,7 @@ export { injectQueryClient } from './inject-query-client'
 export type {
   DevtoolsFeature,
   PersistQueryClientFeature,
+  QueryClientProviderValue,
   QueryFeature,
   QueryFeatures,
 } from './providers'
