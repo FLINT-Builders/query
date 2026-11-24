@@ -75,7 +75,11 @@ export class QueryObserver<
   >
   #selectError: TError | null
   #selectFn?: (data: TQueryData) => TData
+  #selectInput?: unknown
   #selectResult?: TData
+  // The query whose own (non-placeholder) data produced `#selectResult`.
+  // Only that query may fall back to `#selectResult` when select throws.
+  #selectResultQuery?: Query<TQueryFnData, TError, TQueryData, TQueryKey>
   // This property keeps track of the last query with defined data.
   // It will be used to pass the previous data and query to the placeholder function between renders.
   #lastQueryWithDefinedData?: Query<TQueryFnData, TError, TQueryData, TQueryKey>
@@ -657,15 +661,19 @@ export class QueryObserver<
       if (
         prevResult &&
         data === prevResultState?.data &&
+        data === this.#selectInput &&
         options.select === this.#selectFn
       ) {
         data = this.#selectResult
       } else {
+        const selectInput = data
         try {
           this.#selectFn = options.select
+          this.#selectInput = selectInput
           data = options.select(data as any)
           data = replaceData(prevResult?.data, data, options)
           this.#selectResult = data
+          this.#selectResultQuery = isPlaceholderData ? undefined : query
           this.#selectError = null
         } catch (selectError) {
           this.#selectError = selectError as TError
@@ -679,7 +687,12 @@ export class QueryObserver<
 
     if (this.#selectError) {
       error = this.#selectError
-      data = this.#selectResult
+      // Never present another query's or a placeholder's selection as this
+      // query's data.
+      data =
+        !isPlaceholderData && this.#selectResultQuery === query
+          ? this.#selectResult
+          : undefined
       errorUpdatedAt = Date.now()
       status = 'error'
       isPlaceholderData = false
