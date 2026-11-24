@@ -119,6 +119,8 @@ To ensure a seamless querying process without conflicts, it's highly recommended
 
 When an infinite query becomes `stale` and needs to be refetched, each group is fetched `sequentially`, starting from the first one. This ensures that even if the underlying data is mutated, we're not using stale cursors and potentially getting duplicates or skipping records. If an infinite query's results are ever removed from the queryCache, the pagination restarts at the initial state with only the initial group being requested.
 
+Only pages that the query fetched itself, or that were written with `setQueryData` or `initialData`, are refetched this way, and never more than `maxPages`. Pages that were restored into the cache from elsewhere (for example with `hydrate`, a persister, or `query.setState`) are not replayed: the refetch starts again from `initialPageParam` with only the initial group being requested.
+
 ## What if I want to implement a bi-directional infinite list?
 
 Bi-directional lists can be implemented by using the `getPreviousPageParam`, `fetchPreviousPage`, `hasPreviousPage` and `isFetchingPreviousPage` properties and functions.

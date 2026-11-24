@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { queryKey, sleep } from '@tanstack/query-test-utils'
 import { CancelledError, InfiniteQueryObserver, QueryClient } from '..'
-import { infiniteQueryBehavior } from '../infiniteQueryBehavior'
+import {
+  infiniteQueryBehavior,
+  rememberPageParams,
+} from '../infiniteQueryBehavior'
 import type { InfiniteData, InfiniteQueryObserverResult, QueryCache } from '..'
 
 describe('InfiniteQueryBehavior', () => {
@@ -367,7 +370,9 @@ describe('InfiniteQueryBehavior', () => {
       signal: abortController.signal,
     }
 
-    behavior.onFetch(context as any, {} as any)
+    const query = {} as any
+    rememberPageParams(query, context.state.data)
+    behavior.onFetch(context as any, query)
 
     await expect(context.fetchFn()).rejects.toBe(abortController.signal.reason)
     expect(queryFn).toHaveBeenCalledTimes(1)
