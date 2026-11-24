@@ -4,6 +4,7 @@ import {
   notifyManager,
   partialMatchKey,
 } from '@tanstack/query-core'
+import { isWithinMaxAge } from './utils'
 import type {
   Query,
   QueryClient,
@@ -108,19 +109,12 @@ export function experimental_createQueryPersister<TStorageValue = string>({
   filters,
 }: StoragePersisterOptions<TStorageValue>) {
   function isExpiredOrBusted(persistedQuery: PersistedQuery) {
-    if (persistedQuery.state.dataUpdatedAt) {
-      const queryAge = Date.now() - persistedQuery.state.dataUpdatedAt
-      const expired = queryAge > maxAge
-      const busted = persistedQuery.buster !== buster
-
-      if (expired || busted) {
-        return true
-      }
-
-      return false
+    const { dataUpdatedAt } = persistedQuery.state
+    if (!dataUpdatedAt || !isWithinMaxAge(dataUpdatedAt, maxAge, Date.now())) {
+      return true
     }
 
-    return true
+    return persistedQuery.buster !== buster
   }
 
   async function retrieveQuery<T>(
