@@ -46,12 +46,8 @@ export const PersistQueryClientProvider = ({
       const generation = ++restoreGeneration.current
       const isCurrent = () => generation === restoreGeneration.current
       persistQueryClientRestore(options)
-        .then(() => {
-          if (isCurrent()) return refs.current.onSuccess?.()
-        })
-        .catch(() => {
-          if (isCurrent()) return refs.current.onError?.()
-        })
+        .then(() => (isCurrent() ? refs.current.onSuccess?.() : undefined))
+        .catch(() => (isCurrent() ? refs.current.onError?.() : undefined))
         .finally(() => {
           if (isCurrent()) setIsRestoring(false)
         })

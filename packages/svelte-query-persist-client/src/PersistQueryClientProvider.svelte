@@ -54,12 +54,12 @@
 
     isRestoring.current = true
     persistQueryClientRestore(currentOptions)
-      .then(() => {
-        if (generation === restoreGeneration) return props.onSuccess?.()
-      })
-      .catch(() => {
-        if (generation === restoreGeneration) return props.onError?.()
-      })
+      .then(() =>
+        generation === restoreGeneration ? props.onSuccess?.() : undefined,
+      )
+      .catch(() =>
+        generation === restoreGeneration ? props.onError?.() : undefined,
+      )
       .finally(() => {
         if (generation === restoreGeneration) isRestoring.current = false
       })
