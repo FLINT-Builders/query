@@ -64,7 +64,7 @@ export function createHydrationStreamProvider<TShape>() {
 
    * 1. (Happens on server): `useServerInsertedHTML()` is called **on the server** whenever a `Suspense`-boundary completes
    *    - This means that we might have some new entries in the cache that needs to be flushed
-   *    - We pass these to the client by inserting a `<script>`-tag where we do `window[id].push(serializedVersionOfCache)`
+   *    - We pass these to the client by inserting a `<script>`-tag where we do `window[id].push(JSON.parse(serializedVersionOfCache))`
    * 2. (Happens in browser) In `useEffect()`:
    *   - We check if `window[id]` is set to an array and call `push()` on all the entries which will call `onEntries()` with the new entries
    *   - We replace `window[id]` with a `push()`-method that will be called whenever new entries are received
@@ -124,9 +124,12 @@ export function createHydrationStreamProvider<TShape>() {
         return null
       }
       // console.log(`pushing ${stream.length} entries`)
+      // Each entry is embedded as a string literal and decoded with
+      // `JSON.parse`: evaluated as an object literal, a `"__proto__"` key in
+      // the data would set the object's prototype instead of staying data.
       const serializedCacheArgs = stream
         .map((entry) => transformer.serialize(entry))
-        .map((entry) => JSON.stringify(entry))
+        .map((entry) => `JSON.parse(${JSON.stringify(JSON.stringify(entry))})`)
         .join(',')
 
       // Flush stream

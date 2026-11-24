@@ -287,7 +287,7 @@ export function hashKey(queryKey: QueryKey | MutationKey): string {
       ? Object.keys(val)
           .sort()
           .reduce((result, key) => {
-            result[key] = val[key]
+            setOwnProperty(result, key, val[key])
             return result
           }, {} as any)
       : val,
@@ -332,6 +332,21 @@ export function partialMatchKey(a: any, b: any): boolean {
 
 const hasOwn = Object.prototype.hasOwnProperty
 
+// Plain assignment of a `__proto__` key invokes the `Object.prototype` setter
+// and replaces the target's prototype, so that key is defined as data instead.
+function setOwnProperty(target: any, key: PropertyKey, value: unknown): void {
+  if (key === '__proto__') {
+    Object.defineProperty(target, key, {
+      value,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    })
+  } else {
+    target[key] = value
+  }
+}
+
 /**
  * This function returns `a` if `b` is deeply equal.
  * If not, it will replace any deeply equal children of `b` with those of `a`.
@@ -359,11 +374,12 @@ export function replaceEqualDeep(a: any, b: any, depth = 0): any {
 
   for (let i = 0; i < bSize; i++) {
     const key: any = array ? i : bItems[i]
-    const aItem = a[key]
+    const aItem =
+      key === '__proto__' && !hasOwn.call(a, key) ? undefined : a[key]
     const bItem = b[key]
 
     if (aItem === bItem) {
-      copy[key] = aItem
+      setOwnProperty(copy, key, aItem)
       if (array ? i < aSize : hasOwn.call(a, key)) equalItems++
       continue
     }
@@ -374,12 +390,12 @@ export function replaceEqualDeep(a: any, b: any, depth = 0): any {
       typeof aItem !== 'object' ||
       typeof bItem !== 'object'
     ) {
-      copy[key] = bItem
+      setOwnProperty(copy, key, bItem)
       continue
     }
 
     const v = replaceEqualDeep(aItem, bItem, depth + 1)
-    copy[key] = v
+    setOwnProperty(copy, key, v)
     if (v === aItem) equalItems++
   }
 
