@@ -298,7 +298,9 @@ describe('dehydration and rehydration', () => {
     await vi.advanceTimersByTimeAsync(0)
     const dehydrated = dehydrate(queryClient)
     expect(dehydrated.queries.length).toBe(1)
-    expect(dehydrated.queries[0]?.state.error).toStrictEqual(new Error('error'))
+    expect(dehydrated.queries[0]?.state.error).toStrictEqual(
+      new Error('redacted'),
+    )
     const stringified = JSON.stringify(dehydrated)
     const parsed = JSON.parse(stringified)
     const hydrationCache = new QueryCache()

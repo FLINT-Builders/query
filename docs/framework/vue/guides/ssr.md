@@ -265,7 +265,7 @@ To clear the cache after it is not needed and to lower memory consumption, you c
 - `shouldDehydrateMutation: (mutation) => boolean` — whether to dehydrate a given mutation. Called for each mutation in the cache; defaults to only including paused mutations. To extend the default behavior instead of replacing it, import and call `defaultShouldDehydrateMutation` as part of your return statement.
 - `shouldDehydrateQuery: (query) => boolean` — whether to dehydrate a given query. Called for each query in the cache; defaults to only including successful queries (see [above](#only-successful-queries-are-included-in-dehydration)). Extend it the same way, with `defaultShouldDehydrateQuery`.
 - `serializeData?: (data) => any` — transforms (serializes) data during dehydration.
-- `shouldRedactErrors?: (error) => boolean` — only applies to queries still `pending` at dehydration time, whose promise is dehydrated too: decides whether to redact the error if that promise later rejects. Defaults to redacting all such errors. Does **not** apply to `query.state.error` on already-settled queries — that error is included in the dehydrated state as-is, so sanitize it yourself via `shouldDehydrateQuery` if it may contain sensitive data.
+- `shouldRedactErrors?: (error) => boolean` — decides whether to replace an error with a generic `Error('redacted')` before it leaves the server. Applies to `state.error` and `state.fetchFailureReason` of every dehydrated query, `state.error` and `state.failureReason` of every dehydrated mutation, and the rejection of a dehydrated pending query's promise. Defaults to redacting all such errors; return `false` to keep the original error.
 
 `hydrate(client, dehydratedState, options?)` accepts a `HydrateOptions` object:
 

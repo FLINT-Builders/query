@@ -47,9 +47,10 @@ export interface DehydrateOptions {
   /** Predicate to decide whether a given `Query` should be dehydrated. Defaults to `defaultShouldDehydrateQuery`. */
   shouldDehydrateQuery?: (query: Query) => boolean
   /**
-   * Predicate to decide whether a query's error should be redacted before dehydration. Errors are redacted
-   * (replaced with a generic `Error('redacted')`) unless this function is provided and returns `false` for the
-   * given error, in which case the original error is kept.
+   * Predicate to decide whether an error should be redacted before dehydration. Applies to the `error` and
+   * failure reason in the state of every dehydrated query and mutation, and to the rejection of a dehydrated
+   * pending query's promise. Errors are redacted (replaced with a generic `Error('redacted')`) unless this
+   * function is provided and returns `false` for the given error, in which case the original error is kept.
    */
   shouldRedactErrors?: (error: unknown) => boolean
 }
@@ -99,10 +100,48 @@ export interface DehydratedState {
 
 // FUNCTIONS
 
-function dehydrateMutation(mutation: Mutation): DehydratedMutation {
+function redactError<T>(
+  error: T,
+  shouldRedactErrors?: (error: unknown) => boolean,
+): T {
+  if (
+    error === null ||
+    error === undefined ||
+    shouldRedactErrors?.(error) === false
+  ) {
+    return error
+  }
+  return new Error('redacted') as T
+}
+
+function redactErrorState<TError>(
+  error: TError,
+  failureReason: TError,
+  shouldRedactErrors?: (error: unknown) => boolean,
+): { error: TError; failureReason: TError } {
+  const redactedError = redactError(error, shouldRedactErrors)
+  return {
+    error: redactedError,
+    failureReason:
+      failureReason === error
+        ? redactedError
+        : redactError(failureReason, shouldRedactErrors),
+  }
+}
+
+function dehydrateMutation(
+  mutation: Mutation,
+  shouldRedactErrors?: (error: unknown) => boolean,
+): DehydratedMutation {
+  const { error, failureReason } = redactErrorState(
+    mutation.state.error,
+    mutation.state.failureReason,
+    shouldRedactErrors,
+  )
+
   return {
     mutationKey: mutation.options.mutationKey,
-    state: mutation.state,
+    state: { ...mutation.state, error, failureReason },
     ...(mutation.options.scope && { scope: mutation.options.scope }),
     ...(mutation.meta && { meta: mutation.meta }),
   }
@@ -143,18 +182,27 @@ function dehydratePromise(
  * promise is dehydrated too so it can be resumed on the other side instead of re-fetched.
  * @param query - The query to dehydrate.
  * @param serializeData - Optional transform applied to `query.state.data` before it is included in the snapshot.
- * @param shouldRedactErrors - Optional predicate; if it returns `false` for the promise's rejection error, that
- * error is kept as-is instead of being redacted.
+ * @param shouldRedactErrors - Optional predicate; if it returns `false` for `query.state.error`,
+ * `query.state.fetchFailureReason` or the promise's rejection error, that error is kept as-is instead of being
+ * redacted.
  */
 export function dehydrateQuery(
   query: Query,
   serializeData?: TransformerFn,
   shouldRedactErrors?: (error: unknown) => boolean,
 ): DehydratedQuery {
+  const { error, failureReason } = redactErrorState(
+    query.state.error,
+    query.state.fetchFailureReason,
+    shouldRedactErrors,
+  )
+
   return {
     dehydratedAt: Date.now(),
     state: {
       ...query.state,
+      error,
+      fetchFailureReason: failureReason,
       ...(query.state.data !== undefined && {
         data: serializeData
           ? serializeData(query.state.data)
@@ -209,6 +257,10 @@ export function dehydrate(
   client: QueryClient,
   options: DehydrateOptions = {},
 ): DehydratedState {
+  const shouldRedactErrors =
+    options.shouldRedactErrors ??
+    client.getDefaultOptions().dehydrate?.shouldRedactErrors
+
   const filterMutation =
     options.shouldDehydrateMutation ??
     client.getDefaultOptions().dehydrate?.shouldDehydrateMutation ??
@@ -218,17 +270,15 @@ export function dehydrate(
     .getMutationCache()
     .getAll()
     .flatMap((mutation) =>
-      filterMutation(mutation) ? [dehydrateMutation(mutation)] : [],
+      filterMutation(mutation)
+        ? [dehydrateMutation(mutation, shouldRedactErrors)]
+        : [],
     )
 
   const filterQuery =
     options.shouldDehydrateQuery ??
     client.getDefaultOptions().dehydrate?.shouldDehydrateQuery ??
     defaultShouldDehydrateQuery
-
-  const shouldRedactErrors =
-    options.shouldRedactErrors ??
-    client.getDefaultOptions().dehydrate?.shouldRedactErrors
 
   const serializeData =
     options.serializeData ?? client.getDefaultOptions().dehydrate?.serializeData
