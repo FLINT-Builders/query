@@ -1,21 +1,26 @@
 <script lang="ts">
-  import { onDestroy, onMount } from 'svelte'
   import { QueryClient } from '@tanstack/query-core'
-  import { setQueryClientContext } from './context.js'
+  import QueryClientScope from './QueryClientScope.svelte'
   import type { QueryClientProviderProps } from './types.js'
 
   const { client = new QueryClient(), children }: QueryClientProviderProps =
     $props()
 
-  onMount(() => {
-    client.mount()
-  })
+  const currentClient = $derived(client)
 
-  setQueryClientContext(client)
-
-  onDestroy(() => {
-    client.unmount()
+  $effect(() => {
+    const mountedClient = currentClient
+    mountedClient.mount()
+    return () => {
+      mountedClient.unmount()
+    }
   })
 </script>
 
-{@render children()}
+<!-- Context and everything that read it (observers, `useQueryClient` results, hydration) are bound to a
+single client, so a new client gets a freshly mounted subtree instead of one still holding the previous. -->
+{#key currentClient}
+  <QueryClientScope client={currentClient}>
+    {@render children()}
+  </QueryClientScope>
+{/key}
