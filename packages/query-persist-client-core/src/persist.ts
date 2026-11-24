@@ -1,4 +1,5 @@
 import { dehydrate, hydrate } from '@tanstack/query-core'
+import { isExpired } from './utils'
 import type {
   DehydrateOptions,
   DehydratedState,
@@ -79,8 +80,9 @@ export async function persistQueryClientRestore({
     const persistedClient = await persister.restoreClient()
 
     if (persistedClient) {
-      if (persistedClient.timestamp) {
-        const expired = Date.now() - persistedClient.timestamp > maxAge
+      const { timestamp } = persistedClient
+      if (timestamp) {
+        const expired = isExpired(timestamp, maxAge)
         const busted = persistedClient.buster !== buster
         if (expired || busted) {
           return persister.removeClient()

@@ -293,7 +293,7 @@ describe('createPersister', () => {
       storageKey,
       JSON.stringify({
         buster: '',
-        state: { dataUpdatedAt: Date.now() + 1000, data: '' },
+        state: { dataUpdatedAt: Date.now(), data: '' },
       }),
     )
 
