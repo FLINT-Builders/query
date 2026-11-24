@@ -286,15 +286,10 @@ export function hydrate(
   })
 
   dehydratedState.queries?.forEach(
-    ({
-      queryKey,
-      state,
-      queryHash,
-      meta,
-      promise,
-      dehydratedAt,
-      queryType,
-    }) => {
+    ({ queryKey, state, meta, promise, dehydratedAt, queryType }) => {
+      // The dehydrated `queryHash` is not trusted: the cache slot must always
+      // be derived from the `queryKey` the restored query will fetch with.
+      const queryHash = client.defaultQueryOptions({ queryKey }).queryHash
       const syncData = promise ? tryResolveSync(promise) : undefined
       const rawData = state.data === undefined ? syncData?.data : state.data
       const data =

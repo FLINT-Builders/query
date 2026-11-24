@@ -623,6 +623,12 @@ export class Query<
       }
     }
 
+    // The query function must receive the key of the options it runs with,
+    // never a key that was attached to this query from restored state.
+    if (this.options.queryKey) {
+      this.queryKey = this.options.queryKey
+    }
+
     if (process.env.NODE_ENV !== 'production') {
       if (!Array.isArray(this.options.queryKey)) {
         console.error(

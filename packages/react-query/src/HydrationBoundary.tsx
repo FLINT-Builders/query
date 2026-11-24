@@ -128,7 +128,10 @@ export const HydrationBoundary = ({
         const newQueries: DehydratedState['queries'] = []
         const existingQueries: DehydratedState['queries'] = []
         for (const dehydratedQuery of queries) {
-          const existingQuery = queryCache.get(dehydratedQuery.queryHash)
+          const existingQuery = queryCache.get(
+            client.defaultQueryOptions({ queryKey: dehydratedQuery.queryKey })
+              .queryHash,
+          )
 
           if (!existingQuery) {
             newQueries.push(dehydratedQuery)
