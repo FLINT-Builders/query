@@ -1,4 +1,5 @@
 import { dehydrate, hydrate } from '@tanstack/query-core'
+import { isPastTimestamp, isWithinMaxAge } from './utils'
 import type {
   DehydrateOptions,
   DehydratedState,
@@ -63,6 +64,28 @@ function isCacheEventType(eventType: NotifyEventType) {
 }
 
 /**
+ * Hydration uses `dataUpdatedAt` (and `dehydratedAt` for pending queries) as
+ * the query's update time, so a timestamp in the future would keep restored
+ * data fresh and skip refetching.
+ */
+function hasInvalidQueryTimestamps(
+  clientState: DehydratedState,
+  now: number,
+): boolean {
+  const queries: unknown = clientState.queries
+  if (!Array.isArray(queries)) {
+    return false
+  }
+  return (queries as DehydratedState['queries']).some((query) => {
+    const dehydratedAt: unknown = query.dehydratedAt
+    return (
+      !isPastTimestamp(query.state.dataUpdatedAt, now) ||
+      (dehydratedAt !== undefined && !isPastTimestamp(dehydratedAt, now))
+    )
+  })
+}
+
+/**
  * Restores persisted data to the QueryCache
  *  - data obtained from persister.restoreClient
  *  - data is hydrated using hydrateOptions
@@ -79,17 +102,19 @@ export async function persistQueryClientRestore({
     const persistedClient = await persister.restoreClient()
 
     if (persistedClient) {
-      if (persistedClient.timestamp) {
-        const expired = Date.now() - persistedClient.timestamp > maxAge
-        const busted = persistedClient.buster !== buster
-        if (expired || busted) {
-          return persister.removeClient()
-        } else {
-          hydrate(queryClient, persistedClient.clientState, hydrateOptions)
-        }
-      } else {
+      const now = Date.now()
+      const expired =
+        !persistedClient.timestamp ||
+        !isWithinMaxAge(persistedClient.timestamp, maxAge, now)
+      const busted = persistedClient.buster !== buster
+      if (
+        expired ||
+        busted ||
+        hasInvalidQueryTimestamps(persistedClient.clientState, now)
+      ) {
         return persister.removeClient()
       }
+      hydrate(queryClient, persistedClient.clientState, hydrateOptions)
     }
   } catch (err) {
     if (process.env.NODE_ENV !== 'production') {
