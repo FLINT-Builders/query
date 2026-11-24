@@ -8,15 +8,49 @@ import type { QueryClient, QueryKey } from '@tanstack/query-core'
  * can correlate failures with the originating query.
  */
 export interface BroadcastErrorEvent {
-  type: 'updated' | 'removed' | 'added'
+  type: 'updated' | 'removed'
   queryHash: string
   queryKey: QueryKey
 }
 
-type BroadcastMessage =
-  | { type: 'updated'; queryHash: string; queryKey: QueryKey; state: unknown }
-  | { type: 'removed'; queryHash: string; queryKey: QueryKey }
-  | { type: 'added'; queryHash: string; queryKey: QueryKey; state: unknown }
+/**
+ * Any page on the same origin can join the channel (or read the
+ * localStorage fallback), so messages must never carry query data, errors,
+ * failure reasons, or keys. They only name a query by a one-way digest of its
+ * hash; receiving tabs refetch through their own `queryFn`.
+ */
+interface BroadcastMessage {
+  type: BroadcastErrorEvent['type']
+  digest: string
+}
+
+function digestQueryHash(queryHash: string): string {
+  let h1 = 0xdeadbeef
+  let h2 = 0x41c6ce57
+  for (let i = 0; i < queryHash.length; i++) {
+    const code = queryHash.charCodeAt(i)
+    h1 = Math.imul(h1 ^ code, 2654435761)
+    h2 = Math.imul(h2 ^ code, 1597334677)
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507)
+  h1 ^= Math.imul(h2 ^ (h2 >>> 13), 3266489909)
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507)
+  h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909)
+  return (
+    (h2 >>> 0).toString(16).padStart(8, '0') +
+    (h1 >>> 0).toString(16).padStart(8, '0')
+  )
+}
+
+function isBroadcastMessage(value: unknown): value is BroadcastMessage {
+  if (typeof value !== 'object' || value === null) {
+    return false
+  }
+  const { type, digest } = value as Record<string, unknown>
+  return (
+    (type === 'updated' || type === 'removed') && typeof digest === 'string'
+  )
+}
 
 interface BroadcastQueryClientOptions {
   /** The QueryClient to sync. */
@@ -29,10 +63,8 @@ interface BroadcastQueryClientOptions {
   /** Options forwarded to the underlying `BroadcastChannel`. */
   options?: BroadcastChannelOptions
   /**
-   * Called when a query event fails to broadcast to other tabs — most
-   * commonly because the query's `state.data`, `state.error`, or `queryKey`
-   * contains a value the structured-clone algorithm cannot serialize
-   * (e.g. `ReadableStream`, `File`, functions, Vue `reactive` proxies).
+   * Called when a query event fails to broadcast to other tabs, for example
+   * because the underlying channel was closed.
    *
    * Provide this to route failures to an error tracker. If omitted, a
    * `console.warn` is emitted in development so failures are never silent.
@@ -58,7 +90,7 @@ export function broadcastQueryClient({
     try {
       cb()
     } finally {
-      // Guard against `cb` throwing (e.g. `query.setState`/`queryCache.build`
+      // Guard against `cb` throwing (e.g. `queryCache.remove`/`invalidateQueries`
       // triggering a listener that throws while applying an incoming
       // cross-tab message). Without this, `transaction` would stay `true`
       // forever, silently disabling this tab's own broadcasts to other tabs
@@ -74,14 +106,17 @@ export function broadcastQueryClient({
 
   const queryCache = queryClient.getQueryCache()
 
-  const safePost = (message: BroadcastMessage): void => {
-    channel.postMessage(message).catch((error: unknown) => {
-      const event: BroadcastErrorEvent = {
-        type: message.type,
-        queryHash: message.queryHash,
-        queryKey: message.queryKey,
-      }
+  // Hashes of queries refetching because another tab announced an update.
+  // Their success must not be announced back, or two tabs would refetch each
+  // other forever.
+  const remoteRefetches = new Set<string>()
 
+  const safePost = (event: BroadcastErrorEvent): void => {
+    const message: BroadcastMessage = {
+      type: event.type,
+      digest: digestQueryHash(event.queryHash),
+    }
+    channel.postMessage(message).catch((error: unknown) => {
       if (onBroadcastError) {
         const warnCallbackError = (callbackError: unknown) => {
           if (process.env.NODE_ENV !== 'production') {
@@ -101,8 +136,8 @@ export function broadcastQueryClient({
         result?.catch(warnCallbackError)
       } else if (process.env.NODE_ENV !== 'production') {
         console.warn(
-          `[broadcastQueryClient] Failed to broadcast "${event.type}" event for query ${event.queryHash}. ` +
-            'The query value could not be structured-cloned; cross-tab sync for this query was skipped.',
+          `[broadcastQueryClient] Failed to broadcast "${event.type}" event for query ${event.queryHash}; ` +
+            'cross-tab sync for this query was skipped.',
           error,
         )
       }
@@ -115,15 +150,17 @@ export function broadcastQueryClient({
     }
 
     const {
-      query: { queryHash, queryKey, state, observers },
+      query: { queryHash, queryKey, observers },
     } = queryEvent
 
     if (queryEvent.type === 'updated' && queryEvent.action.type === 'success') {
+      if (!queryEvent.action.manual && remoteRefetches.has(queryHash)) {
+        return
+      }
       safePost({
         type: 'updated',
         queryHash,
         queryKey,
-        state,
       })
     }
 
@@ -134,60 +171,44 @@ export function broadcastQueryClient({
         queryKey,
       })
     }
-
-    if (queryEvent.type === 'added') {
-      safePost({
-        type: 'added',
-        queryHash,
-        queryKey,
-        state,
-      })
-    }
   })
 
-  channel.onmessage = (action) => {
-    if (!action?.type) {
+  channel.onmessage = (message: unknown) => {
+    if (!isBroadcastMessage(message)) {
+      return
+    }
+
+    const matches = queryCache
+      .getAll()
+      .filter((query) => digestQueryHash(query.queryHash) === message.digest)
+
+    if (matches.length === 0) {
       return
     }
 
     tx(() => {
-      const { type, queryHash, queryKey, state } = action
-
-      const query = queryCache.get(queryHash)
-
-      if (type === 'updated') {
-        if (query) {
-          query.setState(state)
-          return
-        }
-
-        queryCache.build(
-          queryClient,
-          {
-            queryKey,
-            queryHash,
-          },
-          state,
-        )
-      } else if (type === 'removed') {
-        if (query) {
+      if (message.type === 'removed') {
+        matches.forEach((query) => {
           queryCache.remove(query)
-        }
-      } else if (type === 'added') {
-        if (query) {
-          if (query.state.data === undefined) {
-            query.setState(state)
-          }
-          return
-        }
-        queryCache.build(
-          queryClient,
-          {
-            queryKey,
-            queryHash,
-          },
-          state,
-        )
+        })
+        return
+      }
+
+      const hashes = matches
+        .map((query) => query.queryHash)
+        .filter((queryHash) => !remoteRefetches.has(queryHash))
+      hashes.forEach((queryHash) => remoteRefetches.add(queryHash))
+      const release = () => {
+        hashes.forEach((queryHash) => remoteRefetches.delete(queryHash))
+      }
+
+      try {
+        queryClient
+          .invalidateQueries({ predicate: (query) => matches.includes(query) })
+          .then(release, release)
+      } catch (error) {
+        release()
+        throw error
       }
     })
   }
