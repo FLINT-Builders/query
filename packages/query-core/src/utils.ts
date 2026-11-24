@@ -287,7 +287,7 @@ export function hashKey(queryKey: QueryKey | MutationKey): string {
       ? Object.keys(val)
           .sort()
           .reduce((result, key) => {
-            result[key] = val[key]
+            setOwnProperty(result, key, val[key])
             return result
           }, {} as any)
       : val,
@@ -332,6 +332,22 @@ export function partialMatchKey(a: any, b: any): boolean {
 
 const hasOwn = Object.prototype.hasOwnProperty
 
+// Plain assignment of `__proto__` invokes the `Object.prototype.__proto__`
+// setter and replaces the target's prototype. Define it as an own data
+// property instead, matching how `JSON.parse` stores that key.
+function setOwnProperty(target: any, key: PropertyKey, value: unknown): void {
+  if (key === '__proto__') {
+    Object.defineProperty(target, key, {
+      value,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    })
+  } else {
+    target[key] = value
+  }
+}
+
 /**
  * This function returns `a` if `b` is deeply equal.
  * If not, it will replace any deeply equal children of `b` with those of `a`.
@@ -359,12 +375,15 @@ export function replaceEqualDeep(a: any, b: any, depth = 0): any {
 
   for (let i = 0; i < bSize; i++) {
     const key: any = array ? i : bItems[i]
-    const aItem = a[key]
+    const aHasKey = array ? i < aSize : hasOwn.call(a, key)
+    // Only own values of `a` may be shared; an inherited accessor such as
+    // `__proto__` would otherwise return `Object.prototype`.
+    const aItem = aHasKey ? a[key] : undefined
     const bItem = b[key]
 
     if (aItem === bItem) {
-      copy[key] = aItem
-      if (array ? i < aSize : hasOwn.call(a, key)) equalItems++
+      setOwnProperty(copy, key, aItem)
+      if (aHasKey) equalItems++
       continue
     }
 
@@ -374,12 +393,12 @@ export function replaceEqualDeep(a: any, b: any, depth = 0): any {
       typeof aItem !== 'object' ||
       typeof bItem !== 'object'
     ) {
-      copy[key] = bItem
+      setOwnProperty(copy, key, bItem)
       continue
     }
 
     const v = replaceEqualDeep(aItem, bItem, depth + 1)
-    copy[key] = v
+    setOwnProperty(copy, key, v)
     if (v === aItem) equalItems++
   }
 
