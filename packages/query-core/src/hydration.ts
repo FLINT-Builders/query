@@ -273,13 +273,17 @@ export function hydrate(
     options?.defaultOptions?.deserializeData ??
     client.getDefaultOptions().hydrate?.deserializeData
 
-  dehydratedState.mutations?.forEach(({ state, ...mutationOptions }) => {
+  // Only restore the fields `dehydrateMutation` writes. Anything else in the
+  // snapshot (e.g. `retry`, `mutationFn`) must not override the app's options.
+  dehydratedState.mutations?.forEach(({ mutationKey, meta, scope, state }) => {
     mutationCache.build(
       client,
       {
         ...client.getDefaultOptions().hydrate?.mutations,
         ...options?.defaultOptions?.mutations,
-        ...mutationOptions,
+        ...(mutationKey !== undefined && { mutationKey }),
+        ...(meta !== undefined && { meta }),
+        ...(scope !== undefined && { scope }),
       },
       state,
     )
