@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent } from '@solidjs/testing-library'
-import { createEffect } from 'solid-js'
+import { fireEvent, render } from '@solidjs/testing-library'
+import { createEffect, createSignal } from 'solid-js'
 import { queryKey, sleep } from '@tanstack/query-test-utils'
 import { QueryClient, useMutation, useMutationState } from '..'
 import { renderWithClient } from './utils'
@@ -110,5 +110,57 @@ describe('useMutationState', () => {
     expect(rendered.getByText('data: data1')).toBeInTheDocument()
 
     expect(variables).toEqual([[], [1], []])
+  })
+
+  it('shows only the current client mutation variables after the client accessor changes', async () => {
+    const accountA = new QueryClient()
+    const accountB = new QueryClient()
+    const [client, setClient] = createSignal(accountA)
+
+    const startedOnA = accountA
+      .getMutationCache()
+      .build(accountA, {
+        mutationKey: ['save-profile'],
+        mutationFn: (variables: string) => sleep(30).then(() => variables),
+      })
+      .execute('secret-a')
+
+    await vi.advanceTimersByTimeAsync(0)
+
+    function Page() {
+      const variables = useMutationState(
+        () => ({
+          select: (mutation) => mutation.state.variables as string,
+        }),
+        client,
+      )
+
+      return <div>variables: {variables().join(',') || 'none'}</div>
+    }
+
+    const rendered = render(() => <Page />)
+
+    expect(rendered.getByText('variables: secret-a')).toBeInTheDocument()
+
+    setClient(accountB)
+
+    expect(rendered.getByText('variables: none')).toBeInTheDocument()
+
+    const startedOnB = accountB
+      .getMutationCache()
+      .build(accountB, {
+        mutationKey: ['save-profile'],
+        mutationFn: (variables: string) => sleep(30).then(() => variables),
+      })
+      .execute('secret-b')
+
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(rendered.getByText('variables: secret-b')).toBeInTheDocument()
+
+    await vi.advanceTimersByTimeAsync(30)
+    await Promise.all([startedOnA, startedOnB])
+    accountA.clear()
+    accountB.clear()
   })
 })
