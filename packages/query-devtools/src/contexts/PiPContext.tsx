@@ -28,6 +28,31 @@ type PiPContextType = {
 
 class PipOpenError extends Error {}
 
+// The popup name must not be predictable: `window.open` returns any existing
+// same-origin window that already carries the target name, including the
+// caller itself.
+const createPipWindowName = () => {
+  const bytes = new Uint8Array(16)
+  crypto.getRandomValues(bytes)
+  const id = Array.from(bytes, (byte) =>
+    byte.toString(16).padStart(2, '0'),
+  ).join('')
+  return `TSQD-Devtools-Panel-${id}`
+}
+
+const isBlankPopup = (w: Window) => {
+  if (w === window || w.document === document) {
+    return false
+  }
+  const { head, body } = w.document
+  if (body.childNodes.length > 0) {
+    return false
+  }
+  return Array.from(head.children).every(
+    (element) => element.tagName === 'TITLE',
+  )
+}
+
 const PiPContext = createContext<Accessor<PiPContextType> | undefined>(
   undefined,
 )
@@ -55,7 +80,7 @@ export const PiPProvider = (props: PiPProviderProps) => {
 
     const pip = window.open(
       '',
-      'TSQD-Devtools-Panel',
+      createPipWindowName(),
       `width=${width},height=${height},popup`,
     )
 
@@ -65,21 +90,37 @@ export const PiPProvider = (props: PiPProviderProps) => {
       )
     }
 
-    // Remove existing styles
-    pip.document.head.innerHTML = ''
-    // Remove existing body
-    pip.document.body.innerHTML = ''
-    // Clear Delegated Events
+    // Never render into, or clear, a window that already holds a document.
+    if (!isBlankPopup(pip)) {
+      console.error(
+        'Refusing to open the devtools in picture-in-picture mode: the popup returned by the browser is not a new blank window.',
+      )
+      props.setLocalStore('pip_open', 'false')
+      return
+    }
+
     clearDelegatedEvents(pip.document)
 
     pip.document.title = 'TanStack Query Devtools'
     pip.document.body.style.margin = '0'
 
     // Detect when window is closed by user
-    pip.addEventListener('pagehide', () => {
+    const onPipPageHide = () => {
+      window.removeEventListener('pagehide', onOpenerPageHide)
       props.setLocalStore('pip_open', 'false')
       setPipWindow(null)
-    })
+    }
+    // The popup name is not reused, so a reload cannot reattach to this
+    // window. Close it with its opener instead of leaving it orphaned.
+    const onOpenerPageHide = (event: PageTransitionEvent) => {
+      if (event.persisted) {
+        return
+      }
+      pip.removeEventListener('pagehide', onPipPageHide)
+      pip.close()
+    }
+    pip.addEventListener('pagehide', onPipPageHide)
+    window.addEventListener('pagehide', onOpenerPageHide)
 
     // It is important to copy all parent window styles. Otherwise, there would be no CSS available at all
     // https://developer.chrome.com/docs/web-platform/document-picture-in-picture/#copy-style-sheets-to-the-picture-in-picture-window

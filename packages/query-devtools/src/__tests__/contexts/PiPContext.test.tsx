@@ -94,9 +94,29 @@ describe('PiPContext', () => {
 
       expect(open).toHaveBeenCalledWith(
         '',
-        'TSQD-Devtools-Panel',
+        expect.stringMatching(/^TSQD-Devtools-Panel-[0-9a-f]{32}$/),
         'width=640,height=480,popup',
       )
+    })
+
+    it('should use a new window name for every open', () => {
+      const { open, fakeWindow } = stubPipWindow()
+
+      renderAndAct(
+        (pip) => {
+          pip().requestPipWindow(640, 480)
+          const pagehideHandler = fakeWindow.addEventListener.mock.calls.find(
+            ([event]) => event === 'pagehide',
+          )?.[1]
+          pagehideHandler?.()
+          pip().requestPipWindow(640, 480)
+        },
+        { disabled: true },
+      )
+
+      const names = open.mock.calls.map((call) => (call as Array<unknown>)[1])
+      expect(names).toHaveLength(2)
+      expect(names[0]).not.toBe(names[1])
     })
 
     it('should set the "pipWindow" signal to the opened window', () => {
@@ -137,24 +157,148 @@ describe('PiPContext', () => {
       expect(pipDocument.body.style.margin).toMatch(/^0(px)?$/)
     })
 
-    it('should clear any existing nodes in the PiP document "head"', () => {
-      const { pipDocument } = stubPipWindow()
-      pipDocument.head.appendChild(pipDocument.createElement('meta'))
+    describe('when the returned window is not a new blank popup', () => {
+      function expectRefused(
+        observed: Array<Window | null>,
+        consoleError: ReturnType<typeof vi.spyOn>,
+      ) {
+        expect(observed).toEqual([null])
+        expect(consoleError).toHaveBeenCalledWith(
+          'Refusing to open the devtools in picture-in-picture mode: the popup returned by the browser is not a new blank window.',
+        )
+        expect(localStorage.getItem('TanstackQueryDevtools.pip_open')).toBe(
+          'false',
+        )
+      }
 
-      renderAndAct((pip) => pip().requestPipWindow(640, 480))
+      it('should leave existing nodes in the returned document "head" untouched', () => {
+        const { pipDocument, fakeWindow } = stubPipWindow()
+        const meta = pipDocument.createElement('meta')
+        pipDocument.head.appendChild(meta)
+        const consoleError = vi
+          .spyOn(console, 'error')
+          .mockImplementation(() => {})
+        const observed: Array<Window | null> = []
 
-      expect(pipDocument.head.querySelector('meta')).toBeNull()
+        try {
+          renderAndAct((pip) => {
+            pip().requestPipWindow(640, 480)
+            observed.push(pip().pipWindow)
+          })
+
+          expect(pipDocument.head.contains(meta)).toBe(true)
+          expect(pipDocument.title).toBe('PiP')
+          expect(fakeWindow.addEventListener).not.toHaveBeenCalled()
+          expectRefused(observed, consoleError)
+        } finally {
+          consoleError.mockRestore()
+        }
+      })
+
+      it('should leave existing nodes in the returned document "body" untouched', () => {
+        const { pipDocument } = stubPipWindow()
+        const leftover = pipDocument.createElement('div')
+        leftover.id = 'leftover'
+        pipDocument.body.appendChild(leftover)
+        const consoleError = vi
+          .spyOn(console, 'error')
+          .mockImplementation(() => {})
+        const observed: Array<Window | null> = []
+
+        try {
+          renderAndAct((pip) => {
+            pip().requestPipWindow(640, 480)
+            observed.push(pip().pipWindow)
+          })
+
+          expect(pipDocument.body.querySelector('#leftover')).toBe(leftover)
+          expectRefused(observed, consoleError)
+        } finally {
+          consoleError.mockRestore()
+        }
+      })
+
+      it('should not render into the calling window when it is returned', () => {
+        const open = vi.fn(() => window)
+        vi.stubGlobal('open', open)
+        const marker = document.createElement('main')
+        document.body.appendChild(marker)
+        const consoleError = vi
+          .spyOn(console, 'error')
+          .mockImplementation(() => {})
+        const observed: Array<Window | null> = []
+
+        try {
+          renderAndAct((pip) => {
+            pip().requestPipWindow(640, 480)
+            observed.push(pip().pipWindow)
+          })
+
+          expect(open).toHaveBeenCalledTimes(1)
+          expect(document.body.contains(marker)).toBe(true)
+          expectRefused(observed, consoleError)
+        } finally {
+          consoleError.mockRestore()
+          marker.remove()
+        }
+      })
+
+      it('should not auto-open into a non-blank window from "pip_open"', () => {
+        const { pipDocument } = stubPipWindow()
+        const leftover = pipDocument.createElement('div')
+        pipDocument.body.appendChild(leftover)
+        const consoleError = vi
+          .spyOn(console, 'error')
+          .mockImplementation(() => {})
+
+        try {
+          renderAndAct(() => {}, {
+            initialStorage: { 'TanstackQueryDevtools.pip_open': 'true' },
+          })
+
+          expect(pipDocument.body.contains(leftover)).toBe(true)
+          expect(localStorage.getItem('TanstackQueryDevtools.pip_open')).toBe(
+            'false',
+          )
+        } finally {
+          consoleError.mockRestore()
+        }
+      })
+    })
+  })
+
+  describe('opener "pagehide"', () => {
+    function dispatchOpenerPageHide(persisted: boolean) {
+      const event = new Event('pagehide')
+      Object.defineProperty(event, 'persisted', { value: persisted })
+      window.dispatchEvent(event)
+    }
+
+    it('should close the popup when the opener is unloaded', () => {
+      const { fakeWindow } = stubPipWindow()
+
+      renderAndAct((pip) => pip().requestPipWindow(640, 480), {
+        disabled: true,
+      })
+      dispatchOpenerPageHide(false)
+
+      expect(fakeWindow.close).toHaveBeenCalledTimes(1)
+      expect(fakeWindow.removeEventListener).toHaveBeenCalledWith(
+        'pagehide',
+        expect.any(Function),
+      )
     })
 
-    it('should clear any existing nodes in the PiP document "body"', () => {
-      const { pipDocument } = stubPipWindow()
-      const leftover = pipDocument.createElement('div')
-      leftover.id = 'leftover'
-      pipDocument.body.appendChild(leftover)
+    it('should keep the popup open when the opener enters the back/forward cache', () => {
+      const { fakeWindow } = stubPipWindow()
 
-      renderAndAct((pip) => pip().requestPipWindow(640, 480))
+      renderAndAct((pip) => pip().requestPipWindow(640, 480), {
+        disabled: true,
+      })
+      dispatchOpenerPageHide(true)
 
-      expect(pipDocument.body.querySelector('#leftover')).toBeNull()
+      expect(fakeWindow.close).not.toHaveBeenCalled()
+      dispatchOpenerPageHide(false)
     })
   })
 
@@ -453,7 +597,7 @@ describe('PiPContext', () => {
         renderAndAct(
           (pip) => {
             pip().requestPipWindow(640, 480)
-            // `requestPipWindow` clears the PiP document head, so install
+            // `requestPipWindow` only renders into a blank popup, so install
             // the goober mirror style after that point.
             pipDocument.head.appendChild(pipGooberStyle)
           },

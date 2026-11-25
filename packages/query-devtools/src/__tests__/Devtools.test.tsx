@@ -483,7 +483,7 @@ describe('Devtools', () => {
 
       expect(open).toHaveBeenCalledWith(
         '',
-        'TSQD-Devtools-Panel',
+        expect.stringMatching(/^TSQD-Devtools-Panel-[0-9a-f]{32}$/),
         expect.stringMatching(/^width=\d+,height=\d+,popup$/),
       )
       expect(localStorage.getItem('TanstackQueryDevtools.pip_open')).toBe(
