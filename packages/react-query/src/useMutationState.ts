@@ -165,8 +165,16 @@ export function useMutationState<
   const mutationCache = useQueryClient(queryClient).getMutationCache()
   const optionsRef = React.useRef(options)
   const result = React.useRef<Array<TResult>>(null)
-  if (result.current === null) {
-    result.current = getResult(mutationCache, options)
+  const resultMutationCache = React.useRef<MutationCache>(null)
+
+  // The cached result belongs to one mutation cache and is recomputed when
+  // the client, and with it the mutation cache, changes.
+  const getSnapshot = () => {
+    if (resultMutationCache.current !== mutationCache) {
+      result.current = getResult(mutationCache, options)
+      resultMutationCache.current = mutationCache
+    }
+    return result.current
   }
 
   React.useEffect(() => {
@@ -177,6 +185,9 @@ export function useMutationState<
     React.useCallback(
       (onStoreChange) =>
         mutationCache.subscribe(() => {
+          if (resultMutationCache.current !== mutationCache) {
+            return
+          }
           const nextResult = replaceEqualDeep(
             result.current,
             getResult(mutationCache, optionsRef.current),
@@ -188,7 +199,7 @@ export function useMutationState<
         }),
       [mutationCache],
     ),
-    () => result.current,
-    () => result.current,
+    getSnapshot,
+    getSnapshot,
   )!
 }

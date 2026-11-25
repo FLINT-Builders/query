@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
+import type { QueryClient } from '@tanstack/query-core'
 
 /**
  * This is taken from https://github.com/preactjs/preact/blob/main/compat/src/hooks.js#L8-L54
@@ -84,4 +85,27 @@ export function useSyncExternalStoreWithSelector<TSnapshot, TSelected>(
   }
 
   return useSyncExternalStore(subscribe, getSelectedSnapshot)
+}
+
+/**
+ * Returns an observer created for `client`. Observers read and write the cache
+ * of the client they were created with, so a new one is created when the
+ * client changes.
+ */
+export function useClientObserver<TObserver>(
+  client: QueryClient,
+  createObserver: () => TObserver,
+): TObserver {
+  const [state, setState] = useState(() => ({
+    client,
+    observer: createObserver(),
+  }))
+
+  if (state.client !== client) {
+    const next = { client, observer: createObserver() }
+    setState(next)
+    return next.observer
+  }
+
+  return state.observer
 }

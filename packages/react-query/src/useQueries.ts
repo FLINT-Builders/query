@@ -8,6 +8,7 @@ import {
   notifyManager,
 } from '@tanstack/query-core'
 import { useQueryClient } from './QueryClientProvider'
+import { useClientObserver } from './useClientObserver'
 import { useIsRestoring } from './IsRestoringProvider'
 import { useQueryErrorResetBoundary } from './QueryErrorResetBoundary'
 import {
@@ -415,7 +416,8 @@ export function useQueries<
 
   useClearResetErrorBoundary(errorResetBoundary)
 
-  const [observer] = React.useState(
+  const observer = useClientObserver(
+    client,
     () =>
       new QueriesObserver<TCombinedResult>(
         client,

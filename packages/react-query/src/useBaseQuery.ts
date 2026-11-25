@@ -3,6 +3,7 @@ import * as React from 'react'
 
 import { noop, notifyManager } from '@tanstack/query-core'
 import { useQueryClient } from './QueryClientProvider'
+import { useClientObserver } from './useClientObserver'
 import { useQueryErrorResetBoundary } from './QueryErrorResetBoundary'
 import {
   ensurePreventErrorBoundaryRetry,
@@ -83,7 +84,8 @@ export function useBaseQuery<
   ensurePreventErrorBoundaryRetry(defaultedOptions, errorResetBoundary, query)
   useClearResetErrorBoundary(errorResetBoundary)
 
-  const [observer] = React.useState(
+  const observer = useClientObserver(
+    client,
     () =>
       new Observer<TQueryFnData, TError, TData, TQueryData, TQueryKey>(
         client,
