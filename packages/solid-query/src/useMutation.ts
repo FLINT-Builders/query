@@ -1,5 +1,5 @@
 import { MutationObserver, noop, shouldThrowError } from '@tanstack/query-core'
-import { createComputed, createMemo, on, onCleanup } from 'solid-js'
+import { createComputed, createMemo, on, onCleanup, untrack } from 'solid-js'
 import { createStore } from 'solid-js/store'
 import { useQueryClientResolver } from './QueryClientProvider'
 import type { DefaultError } from '@tanstack/query-core'
@@ -185,12 +185,15 @@ export function useMutation<
   const resolveClient = useQueryClientResolver(queryClient)
   const client = createMemo(() => resolveClient())
 
-  const observer = new MutationObserver<
-    TData,
-    TError,
-    TVariables,
-    TOnMutateResult
-  >(client(), options())
+  // The observer runs every mutation on the client it was created with, so it
+  // has to be recreated whenever a different QueryClient is resolved.
+  const observer = createMemo(
+    () =>
+      new MutationObserver<TData, TError, TVariables, TOnMutateResult>(
+        client(),
+        untrack(options),
+      ),
+  )
 
   const mutate: UseMutateFunction<
     TData,
@@ -198,19 +201,19 @@ export function useMutation<
     TVariables,
     TOnMutateResult
   > = (...args) => {
-    observer.mutate(args[0] as TVariables, args[1]).catch(noop)
+    observer().mutate(args[0] as TVariables, args[1]).catch(noop)
   }
 
   const [state, setState] = createStore<
     UseMutationResult<TData, TError, TVariables, TOnMutateResult>
   >({
-    ...observer.getCurrentResult(),
+    ...observer().getCurrentResult(),
     mutate,
-    mutateAsync: observer.getCurrentResult().mutate,
+    mutateAsync: observer().getCurrentResult().mutate,
   })
 
   createComputed(() => {
-    observer.setOptions(options())
+    observer().setOptions(options())
   })
 
   createComputed(
@@ -219,7 +222,7 @@ export function useMutation<
       () => {
         if (
           state.isError &&
-          shouldThrowError(observer.options.throwOnError, [state.error])
+          shouldThrowError(observer().options.throwOnError, [state.error])
         ) {
           throw state.error
         }
@@ -227,15 +230,28 @@ export function useMutation<
     ),
   )
 
-  const unsubscribe = observer.subscribe((result) => {
-    setState({
-      ...result,
-      mutate,
-      mutateAsync: result.mutate,
-    })
-  })
+  createComputed(
+    on(observer, (currentObserver, previousObserver) => {
+      if (previousObserver) {
+        const result = currentObserver.getCurrentResult()
+        setState({
+          ...result,
+          mutate,
+          mutateAsync: result.mutate,
+        })
+      }
 
-  onCleanup(unsubscribe)
+      onCleanup(
+        currentObserver.subscribe((result) => {
+          setState({
+            ...result,
+            mutate,
+            mutateAsync: result.mutate,
+          })
+        }),
+      )
+    }),
+  )
 
   return state
 }

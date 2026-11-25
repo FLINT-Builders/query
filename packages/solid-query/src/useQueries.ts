@@ -10,6 +10,7 @@ import {
   on,
   onCleanup,
   onMount,
+  untrack,
 } from 'solid-js'
 import { useQueryClientResolver } from './QueryClientProvider'
 import { useIsRestoring } from './isRestoring'
@@ -300,18 +301,26 @@ export function useQueries<
     ),
   )
 
-  const observer = new QueriesObserver(
-    client(),
-    defaultedQueries(),
-    queriesOptions().combine
-      ? ({
-          combine: queriesOptions().combine,
-        } as QueriesObserverOptions<TCombinedResult>)
-      : undefined,
-  )
+  // The observer reads from the client it was created with, so it has to be
+  // recreated whenever a different QueryClient is resolved.
+  const observer = createMemo(() => {
+    const currentClient = client()
+    return untrack(
+      () =>
+        new QueriesObserver(
+          currentClient,
+          defaultedQueries(),
+          queriesOptions().combine
+            ? ({
+                combine: queriesOptions().combine,
+              } as QueriesObserverOptions<TCombinedResult>)
+            : undefined,
+        ),
+    )
+  })
 
   const [state, setState] = createStore<TCombinedResult>(
-    observer.getOptimisticResult(
+    observer().getOptimisticResult(
       defaultedQueries(),
       (queriesOptions() as QueriesObserverOptions<TCombinedResult>).combine,
     )[1](),
@@ -319,10 +328,10 @@ export function useQueries<
 
   createRenderEffect(
     on(
-      () => queriesOptions().queries.length,
+      [() => queriesOptions().queries.length, observer],
       () =>
         setState(
-          observer.getOptimisticResult(
+          observer().getOptimisticResult(
             defaultedQueries(),
             (queriesOptions() as QueriesObserverOptions<TCombinedResult>)
               .combine,
@@ -357,7 +366,7 @@ export function useQueries<
 
   let taskQueue: Array<() => void> = []
   const subscribeToObserver = () =>
-    observer.subscribe((result) => {
+    observer().subscribe((result) => {
       taskQueue.push(() => {
         batch(() => {
           const dataResources_ = dataResources()
@@ -389,7 +398,7 @@ export function useQueries<
   onCleanup(unsubscribe)
 
   onMount(() => {
-    observer.setQueries(
+    observer().setQueries(
       defaultedQueries(),
       queriesOptions().combine
         ? ({
@@ -400,7 +409,7 @@ export function useQueries<
   })
 
   createComputed(() => {
-    observer.setQueries(
+    observer().setQueries(
       defaultedQueries(),
       queriesOptions().combine
         ? ({
