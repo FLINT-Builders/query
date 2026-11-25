@@ -7,8 +7,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.number || github.ref }}
   cancel-in-progress: true
 
-env:
-  NX_CLOUD_ACCESS_TOKEN: ${{ secrets.NX_CLOUD_ACCESS_TOKEN }}
+# NX_CLOUD_ACCESS_TOKEN is intentionally not provided: every step here runs code
+# or config from the pull request. Nx Cloud is reached through `nxCloudId` in
+# nx.json, the same way fork pull requests already run.
 
 permissions: {}
 
@@ -26,7 +27,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Start Nx Agents
-        run: npx nx-cloud start-ci-run --distribute-on=".nx/workflows/dynamic-changesets.yaml"
+        run: npx nx-cloud@19.1.5 start-ci-run --distribute-on=".nx/workflows/dynamic-changesets.yaml"
       - name: Setup Tools
         uses: TanStack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
       - name: Get base and head commits for `nx affected`
@@ -37,7 +38,7 @@ jobs:
         run: pnpm run test:pr
       - name: Stop Nx Agents
         if: ${{ always() }}
-        run: npx nx-cloud stop-all-agents
+        run: npx nx-cloud@19.1.5 stop-all-agents
   preview:
     name: Preview
     runs-on: ubuntu-latest
@@ -54,7 +55,7 @@ jobs:
       - name: Build Packages
         run: pnpm run build:all
       - name: Publish Previews
-        run: pnpx pkg-pr-new publish --pnpm --compact './packages/*' --template './examples/*/*'
+        run: pnpx pkg-pr-new@0.0.94 publish --pnpm --compact './packages/*' --template './examples/*/*'
       - name: Determine commit SHA
         id: determine-sha
         run: echo "COMMIT_SHA=${COMMIT_SHA}" >> "$GITHUB_ENV"
