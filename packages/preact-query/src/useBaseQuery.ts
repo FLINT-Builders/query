@@ -5,7 +5,7 @@ import type {
   QueryObserver,
   QueryObserverResult,
 } from '@tanstack/query-core'
-import { useCallback, useEffect, useState } from 'preact/hooks'
+import { useCallback, useEffect } from 'preact/hooks'
 
 import { useIsRestoring } from './IsRestoringProvider'
 import { useQueryClient } from './QueryClientProvider'
@@ -21,7 +21,7 @@ import {
   shouldSuspend,
 } from './suspense'
 import type { UseBaseQueryOptions } from './types'
-import { useSyncExternalStore } from './utils'
+import { useClientObserver, useSyncExternalStore } from './utils'
 
 export function useBaseQuery<
   TQueryFnData,
@@ -80,10 +80,11 @@ export function useBaseQuery<
 
   useClearResetErrorBoundary(errorResetBoundary)
 
-  const [observer] = useState(
-    () =>
+  const observer = useClientObserver(
+    client,
+    (observerClient) =>
       new Observer<TQueryFnData, TError, TData, TQueryData, TQueryKey>(
-        client,
+        observerClient,
         defaultedOptions,
       ),
   )
