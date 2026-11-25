@@ -66,7 +66,10 @@ export const injectDevtoolsPanel: InjectDevtoolsPanel = (
       } = queryOptions()
 
       untracked(() => {
-        if (!client) throw new Error('No QueryClient found')
+        if (!client) {
+          destroy()
+          throw new Error('No QueryClient found')
+        }
         if (!devtools && hostElement) {
           import('@tanstack/query-devtools')
             .then((queryDevtools) => {
