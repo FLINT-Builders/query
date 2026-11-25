@@ -61,7 +61,7 @@
     initialIsOpen = false,
     buttonPosition = 'bottom-right',
     position = 'bottom',
-    client = useQueryClient(),
+    client: clientProp = undefined,
     errorTypes = [],
     styleNonce = undefined,
     shadowDOMTarget = undefined,
@@ -69,13 +69,26 @@
     theme = 'system',
   }: DevtoolsOptions = $props()
 
+  function getContextClient() {
+    try {
+      return useQueryClient()
+    } catch {
+      return undefined
+    }
+  }
+
+  const contextClient = clientProp ? getContextClient() : useQueryClient()
+  const client = $derived(clientProp ?? contextClient)
+
   let ref: HTMLDivElement
   let devtools: TanstackQueryDevtools | undefined
+  let isMounted = false
 
   if (DEV && BROWSER) {
     onMount(() => {
       import('@tanstack/query-devtools').then((m) => {
         const QueryDevtools = m.TanstackQueryDevtools
+        if (!client) return
 
         devtools = new QueryDevtools({
           client,
@@ -93,8 +106,33 @@
         })
 
         devtools.mount(ref)
+        isMounted = true
       })
-      return () => devtools?.unmount()
+      return () => {
+        if (isMounted) {
+          devtools?.unmount()
+          isMounted = false
+        }
+      }
+    })
+
+    // The devtools must never keep rendering a client the app has replaced,
+    // so they unmount while no client is available.
+    $effect(() => {
+      const current = client
+      if (!devtools) return
+      if (!current) {
+        if (isMounted) {
+          devtools.unmount()
+          isMounted = false
+        }
+        return
+      }
+      devtools.setClient(current)
+      if (!isMounted) {
+        devtools.mount(ref)
+        isMounted = true
+      }
     })
 
     $effect(() => {
