@@ -1,3 +1,4 @@
+import { untrack } from 'svelte'
 import { replaceEqualDeep } from '@tanstack/query-core'
 import { useQueryClient } from './useQueryClient.js'
 import type {
@@ -107,15 +108,23 @@ export function useMutationState<
   const mutationCache = useQueryClient(queryClient).getMutationCache()
   const result = $state(getResult(mutationCache, options))
 
+  const setResult = (next: Array<TResult>) => {
+    const nextResult = replaceEqualDeep(result, next)
+    if (result !== nextResult) {
+      result.splice(0, result.length, ...nextResult)
+    }
+  }
+
+  // `options` may be reactive state that is updated in place; re-read it here
+  // so a filter or select change is applied without waiting for a cache event.
+  $effect.pre(() => {
+    const next = getResult(mutationCache, options)
+    untrack(() => setResult(next))
+  })
+
   $effect(() => {
     const unsubscribe = mutationCache.subscribe(() => {
-      const nextResult = replaceEqualDeep(
-        result,
-        getResult(mutationCache, options),
-      )
-      if (result !== nextResult) {
-        result.splice(0, result.length, ...nextResult)
-      }
+      setResult(getResult(mutationCache, options))
     })
 
     return unsubscribe

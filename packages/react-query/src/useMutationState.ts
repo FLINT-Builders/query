@@ -165,9 +165,12 @@ export function useMutationState<
   const mutationCache = useQueryClient(queryClient).getMutationCache()
   const optionsRef = React.useRef(options)
   const result = React.useRef<Array<TResult>>(null)
-  if (result.current === null) {
-    result.current = getResult(mutationCache, options)
-  }
+  // Recompute on every render: the cache and options may differ from the ones
+  // the last snapshot was taken with, and neither change emits a cache event.
+  // The ref only keeps the previous result for structural sharing.
+  const latestResult = getResult(mutationCache, options)
+  // eslint-disable-next-line react-hooks/refs
+  result.current = replaceEqualDeep(result.current, latestResult)
 
   React.useEffect(() => {
     optionsRef.current = options

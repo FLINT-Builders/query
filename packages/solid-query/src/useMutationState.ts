@@ -133,23 +133,20 @@ export function useMutationState<
   const client = createMemo(() => resolveClient())
   const mutationCache = createMemo(() => client().getMutationCache())
 
-  const [result, setResult] = createSignal(
-    getResult(mutationCache(), options()),
-  )
+  const [cacheVersion, setCacheVersion] = createSignal(0)
 
   createEffect(() => {
     const unsubscribe = mutationCache().subscribe(() => {
-      const nextResult = replaceEqualDeep(
-        result(),
-        getResult(mutationCache(), options()),
-      )
-      if (result() !== nextResult) {
-        setResult(nextResult)
-      }
+      setCacheVersion((version) => version + 1)
     })
 
     onCleanup(unsubscribe)
   })
 
-  return result
+  // Derived from the current cache and options so that switching either one
+  // recomputes immediately instead of waiting for the next cache event.
+  return createMemo<Array<TResult>>((previous) => {
+    cacheVersion()
+    return replaceEqualDeep(previous, getResult(mutationCache(), options()))
+  })
 }
