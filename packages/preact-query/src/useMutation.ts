@@ -5,7 +5,7 @@ import {
   shouldThrowError,
 } from '@tanstack/query-core'
 import type { DefaultError, QueryClient } from '@tanstack/query-core'
-import { useCallback, useEffect, useState } from 'preact/hooks'
+import { useCallback, useEffect } from 'preact/hooks'
 
 import { useQueryClient } from './QueryClientProvider'
 import type {
@@ -13,7 +13,7 @@ import type {
   UseMutationOptions,
   UseMutationResult,
 } from './types'
-import { useSyncExternalStore } from './utils'
+import { useKeyedInstance, useSyncExternalStore } from './utils'
 
 // HOOK
 
@@ -200,7 +200,8 @@ export function useMutation<
 ): UseMutationResult<TData, TError, TVariables, TOnMutateResult> {
   const client = useQueryClient(queryClient)
 
-  const [observer] = useState(
+  const observer = useKeyedInstance(
+    client,
     () =>
       new MutationObserver<TData, TError, TVariables, TOnMutateResult>(
         client,

@@ -61,6 +61,24 @@ function didSnapshotChange(inst: {
   }
 }
 
+/**
+ * Returns the value built by `create` for `key`. A new value is built on the
+ * first render and whenever `key` changes identity, so the result is never
+ * one that was built for a previous `key`.
+ */
+export function useKeyedInstance<TKey, TValue>(
+  key: TKey,
+  create: () => TValue,
+): TValue {
+  const instanceRef = useRef<{ key: TKey; value: TValue } | null>(null)
+
+  if (instanceRef.current === null || instanceRef.current.key !== key) {
+    instanceRef.current = { key, value: create() }
+  }
+
+  return instanceRef.current.value
+}
+
 export function useSyncExternalStoreWithSelector<TSnapshot, TSelected>(
   subscribe: (onStoreChange: () => void) => () => void,
   getSnapshot: () => TSnapshot,

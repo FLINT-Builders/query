@@ -9,7 +9,7 @@ import type {
 import { useCallback, useEffect, useRef } from 'preact/hooks'
 
 import { useQueryClient } from './QueryClientProvider'
-import { useSyncExternalStore } from './utils'
+import { useKeyedInstance, useSyncExternalStore } from './utils'
 
 /**
  * The `useIsMutating` hook returns the `number` of mutations that your application currently has `pending`
@@ -164,10 +164,9 @@ export function useMutationState<
 ): Array<TResult> {
   const mutationCache = useQueryClient(queryClient).getMutationCache()
   const optionsRef = useRef(options)
-  const result = useRef<Array<TResult>>(null)
-  if (result.current === null) {
-    result.current = getResult(mutationCache, options)
-  }
+  const result = useKeyedInstance(mutationCache, () => ({
+    current: getResult(mutationCache, options),
+  }))
 
   useEffect(() => {
     optionsRef.current = options
@@ -186,8 +185,8 @@ export function useMutationState<
             notifyManager.schedule(onStoreChange)
           }
         }),
-      [mutationCache],
+      [mutationCache, result],
     ),
     () => result.current,
-  )!
+  )
 }
