@@ -4,10 +4,16 @@ title: useIsFetching
 ---
 
 ```ts
-function useIsFetching(filters?: QueryFilters<readonly unknown[]>, queryClient?: QueryClient): ReactiveValue<number>;
+function useIsFetching(filters?: 
+  | QueryFilters<readonly unknown[]>
+  | Accessor<
+  | QueryFilters<readonly unknown[]>
+  | undefined>, queryClient?: 
+  | QueryClient
+| Accessor<QueryClient>): ReactiveValue<number>;
 ```
 
-Defined in: [packages/svelte-query/src/useIsFetching.svelte.ts:43](https://github.com/TanStack/query/blob/main/packages/svelte-query/src/useIsFetching.svelte.ts#L43)
+Defined in: [packages/svelte-query/src/useIsFetching.svelte.ts:44](https://github.com/TanStack/query/blob/main/packages/svelte-query/src/useIsFetching.svelte.ts#L44)
 
 The `useIsFetching` function returns the `number` of the queries that your application is loading or
 fetching in the background (useful for app-wide loading indicators).
@@ -16,17 +22,19 @@ fetching in the background (useful for app-wide loading indicators).
 
 ### filters?
 
-[`QueryFilters`](../interfaces/QueryFilters.md)\<readonly `unknown`[]\>
-
 [QueryFilters](../interfaces/QueryFilters.md) to narrow down which queries to count. Omit to count every fetching
-query.
+query. Pass a function returning them to recount when they change.
+
+[`QueryFilters`](../interfaces/QueryFilters.md)\<readonly `unknown`[]\> | [`Accessor`](../type-aliases/Accessor.md)\<
+\| [`QueryFilters`](../interfaces/QueryFilters.md)\<readonly `unknown`[]\>
+\| `undefined`\>
 
 ### queryClient?
 
-[`QueryClient`](../classes/QueryClient.md)
+Use this to use a custom `QueryClient`, or pass a function returning it to follow a
+client that changes. Otherwise, the one from the nearest context will be used.
 
-Use this to use a custom `QueryClient`. Otherwise, the one from the nearest context will
-be used.
+[`QueryClient`](../classes/QueryClient.md) | [`Accessor`](../type-aliases/Accessor.md)\<[`QueryClient`](../classes/QueryClient.md)\>
 
 ## Returns
 

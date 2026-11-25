@@ -1,6 +1,6 @@
 import { onDestroy } from 'svelte'
 import { useIsRestoring } from './useIsRestoring.js'
-import { useQueryClient } from './useQueryClient.js'
+import { useQueryClientAccessor } from './useQueryClient.js'
 import { createRawRef } from './containers.svelte.js'
 import { watchChanges } from './utils.svelte.js'
 import type { QueryClient, QueryKey, QueryObserver } from '@tanstack/query-core'
@@ -30,7 +30,8 @@ export function createBaseQuery<
   queryClient?: Accessor<QueryClient>,
 ): CreateBaseQueryResult<TData, TError> {
   /** Load query client */
-  const client = $derived(useQueryClient(queryClient?.()))
+  const getClient = useQueryClientAccessor(queryClient)
+  const client = $derived(getClient())
   const isRestoring = useIsRestoring()
 
   const resolvedOptions = $derived.by(() => {

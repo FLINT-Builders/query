@@ -1,5 +1,5 @@
 import { MutationObserver, noop, notifyManager } from '@tanstack/query-core'
-import { useQueryClient } from './useQueryClient.js'
+import { useQueryClientAccessor } from './useQueryClient.js'
 import { watchChanges } from './utils.svelte.js'
 import type {
   Accessor,
@@ -177,7 +177,8 @@ export function createMutation<
   options: Accessor<CreateMutationOptions<TData, TError, TVariables, TContext>>,
   queryClient?: Accessor<QueryClient>,
 ): CreateMutationResult<TData, TError, TVariables, TContext> {
-  const client = $derived(useQueryClient(queryClient?.()))
+  const getClient = useQueryClientAccessor(queryClient)
+  const client = $derived(getClient())
 
   // svelte-ignore state_referenced_locally - intentional, initial value
   let observer = $state(

@@ -7,7 +7,7 @@ title: setIsRestoringContext
 function setIsRestoringContext(isRestoring: Box<boolean>): void;
 ```
 
-Defined in: [packages/svelte-query/src/context.ts:64](https://github.com/TanStack/query/blob/main/packages/svelte-query/src/context.ts#L64)
+Defined in: [packages/svelte-query/src/context.ts:84](https://github.com/TanStack/query/blob/main/packages/svelte-query/src/context.ts#L84)
 
 Sets a `isRestoring` on Svelte's context
 

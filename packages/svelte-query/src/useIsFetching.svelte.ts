@@ -1,15 +1,16 @@
 import { ReactiveValue } from './containers.svelte.js'
-import { useQueryClient } from './useQueryClient.js'
+import { useQueryClientAccessor } from './useQueryClient.js'
 import type { QueryClient, QueryFilters } from '@tanstack/query-core'
+import type { Accessor } from './types.js'
 
 /**
  * The `useIsFetching` function returns the `number` of the queries that your application is loading or
  * fetching in the background (useful for app-wide loading indicators).
  *
  * @param filters - {@link QueryFilters} to narrow down which queries to count. Omit to count every fetching
- * query.
- * @param queryClient - Use this to use a custom `QueryClient`. Otherwise, the one from the nearest context will
- * be used.
+ * query. Pass a function returning them to recount when they change.
+ * @param queryClient - Use this to use a custom `QueryClient`, or pass a function returning it to follow a
+ * client that changes. Otherwise, the one from the nearest context will be used.
  * @returns A reactive value — read `.current` to get how many matching queries are currently fetching.
  *
  * @example
@@ -41,14 +42,18 @@ import type { QueryClient, QueryFilters } from '@tanstack/query-core'
  * ```
  */
 export function useIsFetching(
-  filters?: QueryFilters,
-  queryClient?: QueryClient,
+  filters?: QueryFilters | Accessor<QueryFilters | undefined>,
+  queryClient?: QueryClient | Accessor<QueryClient>,
 ): ReactiveValue<number> {
-  const client = useQueryClient(queryClient)
-  const queryCache = client.getQueryCache()
+  const getClient = useQueryClientAccessor(queryClient)
+  const getFilters = typeof filters === 'function' ? filters : () => filters
+  const client = $derived(getClient())
 
   return new ReactiveValue(
-    () => client.isFetching(filters),
-    (update) => queryCache.subscribe(update),
+    () => client.isFetching(getFilters()),
+    (update) =>
+      $effect.root(() => {
+        $effect.pre(() => client.getQueryCache().subscribe(update))
+      }),
   )
 }
