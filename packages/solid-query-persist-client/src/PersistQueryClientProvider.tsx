@@ -24,13 +24,54 @@ export const PersistQueryClientProvider = (
     queryClient: props.client,
   }))
 
+  let hasRestored = false
+
   createEffect(() => {
+    const restoreOptions = options()
+    let isCurrent = true
+    onCleanup(() => {
+      isCurrent = false
+    })
+
     setIsRestoring(true)
-    persistQueryClientRestore(options())
+    // Fetches started before this restore must not write into the cache
+    // that the new snapshot is about to be hydrated into.
+    if (hasRestored) {
+      void restoreOptions.queryClient.cancelQueries()
+    }
+    hasRestored = true
+
+    const { persister } = restoreOptions
+    persistQueryClientRestore({
+      ...restoreOptions,
+      persister: {
+        persistClient: (persistedClient) =>
+          persister.persistClient(persistedClient),
+        restoreClient: async () => {
+          const persistedClient = await persister.restoreClient()
+          if (!persistedClient || !isCurrent) return undefined
+          return {
+            ...persistedClient,
+            // Read synchronously by `hydrate`, so a restore superseded after
+            // this resolved still hydrates nothing.
+            get clientState() {
+              return isCurrent
+                ? persistedClient.clientState
+                : { mutations: [], queries: [] }
+            },
+          }
+        },
+        removeClient: async () => {
+          if (isCurrent) await persister.removeClient()
+        },
+      },
+    })
       .then(() => props.onSuccess?.())
       .catch(() => props.onError?.())
       .finally(() => {
-        setIsRestoring(false)
+        if (isCurrent) {
+          setIsRestoring(false)
+        }
       })
   })
 

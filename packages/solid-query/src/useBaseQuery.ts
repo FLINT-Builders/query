@@ -226,6 +226,25 @@ export function useBaseQuery<
    */
   let unsubscribe: (() => void) | null = null
 
+  /**
+   * Set when the subscription was dropped because a restore started while this
+   * query was mounted. Resuming after that restore is not a new mount, so it
+   * must not trigger `refetchOnMount`.
+   */
+  let resumeAfterRestore = false
+
+  const subscribeClient = () => {
+    if (!resumeAfterRestore) return createClientSubscriber()
+    resumeAfterRestore = false
+    const obs = observer()
+    const opts = obs.options
+    obs.setOptions({ ...opts, refetchOnMount: false })
+    const unsubscribeClient = createClientSubscriber()
+    obs.setOptions(opts)
+    observerResult = obs.getCurrentResult()
+    return unsubscribeClient
+  }
+
   /*
     Fixes #7275
     In a few cases, the observer could unmount before the resource is loaded.
@@ -242,7 +261,7 @@ export function useBaseQuery<
         if (isServer) {
           unsubscribe = createServerSubscriber(resolve, reject)
         } else if (!unsubscribe && !isRestoring()) {
-          unsubscribe = createClientSubscriber()
+          unsubscribe = subscribeClient()
         }
         obs.updateResult()
 
@@ -333,9 +352,16 @@ export function useBaseQuery<
     on(
       isRestoring,
       (restoring) => {
-        if (!restoring && !isServer) {
-          refetch()
+        if (isServer) return
+        if (restoring) {
+          if (unsubscribe) {
+            unsubscribe()
+            unsubscribe = null
+            resumeAfterRestore = true
+          }
+          return
         }
+        refetch()
       },
       { defer: true },
     ),
