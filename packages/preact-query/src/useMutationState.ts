@@ -164,9 +164,12 @@ export function useMutationState<
 ): Array<TResult> {
   const mutationCache = useQueryClient(queryClient).getMutationCache()
   const optionsRef = useRef(options)
-  const result = useRef<Array<TResult>>(null)
-  if (result.current === null) {
-    result.current = getResult(mutationCache, options)
+  const result = useRef<{
+    mutationCache: MutationCache
+    value: Array<TResult>
+  }>()
+  if (result.current?.mutationCache !== mutationCache) {
+    result.current = { mutationCache, value: getResult(mutationCache, options) }
   }
 
   useEffect(() => {
@@ -177,17 +180,21 @@ export function useMutationState<
     useCallback(
       (onStoreChange) =>
         mutationCache.subscribe(() => {
+          const current = result.current!
+          if (current.mutationCache !== mutationCache) {
+            return
+          }
           const nextResult = replaceEqualDeep(
-            result.current,
+            current.value,
             getResult(mutationCache, optionsRef.current),
           )
-          if (result.current !== nextResult) {
-            result.current = nextResult
+          if (current.value !== nextResult) {
+            current.value = nextResult
             notifyManager.schedule(onStoreChange)
           }
         }),
       [mutationCache],
     ),
-    () => result.current,
-  )!
+    () => result.current!.value,
+  )
 }

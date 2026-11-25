@@ -1,4 +1,21 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
+import type { QueryClient } from '@tanstack/query-core'
+
+/**
+ * Returns an observer created by `create` for `client`, and replaces it with a new one whenever `client`
+ * changes, so a mounted hook never keeps reading from or writing to a previous client's caches.
+ * `create` must build the observer from the client it receives.
+ */
+export function useClientObserver<TObserver>(
+  client: QueryClient,
+  create: (client: QueryClient) => TObserver,
+): TObserver {
+  const binding = useRef<{ client: QueryClient; observer: TObserver }>()
+  if (binding.current?.client !== client) {
+    binding.current = { client, observer: create(client) }
+  }
+  return binding.current.observer
+}
 
 /**
  * This is taken from https://github.com/preactjs/preact/blob/main/compat/src/hooks.js#L8-L54
