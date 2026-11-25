@@ -310,8 +310,10 @@ describe('React hydration', () => {
         </QueryClientProvider>,
       )
 
-      await vi.advanceTimersByTimeAsync(20)
+      expect(rendered.getByText('stringCached')).toBeInTheDocument()
+      await vi.advanceTimersByTimeAsync(21)
       expect(rendered.getByText('string')).toBeInTheDocument()
+      expect(newClientQueryClient.getQueryData(['string'])).toEqual(['string'])
 
       queryClient.clear()
       newClientQueryClient.clear()

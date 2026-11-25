@@ -7,9 +7,9 @@ import {
   createComputed,
   createMemo,
   createResource,
-  createSignal,
   on,
   onCleanup,
+  untrack,
 } from 'solid-js'
 import { createStore, reconcile, unwrap } from 'solid-js/store'
 import { useQueryClientResolver } from './QueryClientProvider'
@@ -138,11 +138,14 @@ export function useBaseQuery<
   })
   const initialOptions = defaultedOptions()
 
-  const [observer, setObserver] = createSignal(
-    new Observer(client(), defaultedOptions()),
+  // The observer reads from the client it was created with, so it has to be
+  // recreated whenever a different QueryClient is resolved.
+  const observer = createMemo(
+    () => new Observer(client(), untrack(defaultedOptions)),
   )
 
-  let observerResult = observer().getOptimisticResult(defaultedOptions())
+  let previousObserver = observer()
+  let observerResult = previousObserver.getOptimisticResult(defaultedOptions())
   const [state, setState] =
     createStore<QueryObserverResult<TData, TError>>(observerResult)
 
@@ -314,23 +317,6 @@ export function useBaseQuery<
 
   createComputed(
     on(
-      client,
-      (c) => {
-        if (unsubscribe) {
-          unsubscribe()
-        }
-        const newObserver = new Observer(c, defaultedOptions())
-        unsubscribe = createClientSubscriber()
-        setObserver(newObserver)
-      },
-      {
-        defer: true,
-      },
-    ),
-  )
-
-  createComputed(
-    on(
       isRestoring,
       (restoring) => {
         if (!restoring && !isServer) {
@@ -361,7 +347,14 @@ export function useBaseQuery<
       [observer, defaultedOptions],
       ([obs, opts]) => {
         obs.setOptions(opts)
-        setStateWithReconciliation(obs.getOptimisticResult(opts))
+        const optimisticResult = obs.getOptimisticResult(opts)
+        if (obs !== previousObserver) {
+          previousObserver = obs
+          unsubscribe?.()
+          unsubscribe = null
+          observerResult = optimisticResult
+        }
+        setStateWithReconciliation(optimisticResult)
         refetch()
       },
       { defer: true },
