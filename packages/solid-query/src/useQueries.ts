@@ -300,18 +300,26 @@ export function useQueries<
     ),
   )
 
-  const observer = new QueriesObserver(
-    client(),
-    defaultedQueries(),
-    queriesOptions().combine
-      ? ({
-          combine: queriesOptions().combine,
-        } as QueriesObserverOptions<TCombinedResult>)
-      : undefined,
+  // An observer reads and writes the cache of the client it was created with,
+  // so it has to be replaced when the client changes.
+  const observer = createMemo(
+    on(
+      client,
+      (currentClient) =>
+        new QueriesObserver(
+          currentClient,
+          defaultedQueries(),
+          queriesOptions().combine
+            ? ({
+                combine: queriesOptions().combine,
+              } as QueriesObserverOptions<TCombinedResult>)
+            : undefined,
+        ),
+    ),
   )
 
   const [state, setState] = createStore<TCombinedResult>(
-    observer.getOptimisticResult(
+    observer().getOptimisticResult(
       defaultedQueries(),
       (queriesOptions() as QueriesObserverOptions<TCombinedResult>).combine,
     )[1](),
@@ -322,7 +330,7 @@ export function useQueries<
       () => queriesOptions().queries.length,
       () =>
         setState(
-          observer.getOptimisticResult(
+          observer().getOptimisticResult(
             defaultedQueries(),
             (queriesOptions() as QueriesObserverOptions<TCombinedResult>)
               .combine,
@@ -355,21 +363,44 @@ export function useQueries<
     }
   })
 
+  const applyResult = (result: Array<QueryObserverResult>) => {
+    batch(() => {
+      const dataResources_ = dataResources()
+      for (let index = 0; index < dataResources_.length; index++) {
+        const dataResource = dataResources_[index]!
+        const unwrappedResult = { ...unwrap(result[index]) }
+        // @ts-expect-error typescript pedantry regarding the possible range of index
+        setState(index, unwrap(unwrappedResult))
+        dataResource[1].mutate(() => unwrap(state[index]!.data))
+        dataResource[1].refetch()
+      }
+    })
+  }
+
+  createComputed(
+    on(
+      observer,
+      (currentObserver) =>
+        applyResult(
+          currentObserver.getOptimisticResult(
+            defaultedQueries(),
+            (queriesOptions() as QueriesObserverOptions<TCombinedResult>)
+              .combine,
+          )[0],
+        ),
+      { defer: true },
+    ),
+  )
+
   let taskQueue: Array<() => void> = []
-  const subscribeToObserver = () =>
-    observer.subscribe((result) => {
+  const subscribeToObserver = (
+    subscribedObserver: QueriesObserver<TCombinedResult>,
+  ) =>
+    subscribedObserver.subscribe((result) => {
       taskQueue.push(() => {
-        batch(() => {
-          const dataResources_ = dataResources()
-          for (let index = 0; index < dataResources_.length; index++) {
-            const dataResource = dataResources_[index]!
-            const unwrappedResult = { ...unwrap(result[index]) }
-            // @ts-expect-error typescript pedantry regarding the possible range of index
-            setState(index, unwrap(unwrappedResult))
-            dataResource[1].mutate(() => unwrap(state[index]!.data))
-            dataResource[1].refetch()
-          }
-        })
+        // A replaced observer may still report until its deferred unsubscribe runs.
+        if (subscribedObserver !== observer()) return
+        applyResult(result)
       })
 
       queueMicrotask(() => {
@@ -382,14 +413,15 @@ export function useQueries<
   let unsubscribe: () => void = noop
   createComputed<() => void>((cleanup) => {
     cleanup?.()
-    unsubscribe = isRestoring() ? noop : subscribeToObserver()
+    const currentObserver = observer()
+    unsubscribe = isRestoring() ? noop : subscribeToObserver(currentObserver)
     // cleanup needs to be scheduled after synchronous effects take place
     return () => queueMicrotask(unsubscribe)
   })
-  onCleanup(unsubscribe)
+  onCleanup(() => unsubscribe())
 
   onMount(() => {
-    observer.setQueries(
+    observer().setQueries(
       defaultedQueries(),
       queriesOptions().combine
         ? ({
@@ -400,7 +432,7 @@ export function useQueries<
   })
 
   createComputed(() => {
-    observer.setQueries(
+    observer().setQueries(
       defaultedQueries(),
       queriesOptions().combine
         ? ({
