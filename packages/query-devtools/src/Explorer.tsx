@@ -164,7 +164,7 @@ const ClearArrayButton = (props: {
   const styles = createMemo(() => {
     return theme() === 'dark' ? darkStyles(css) : lightStyles(css)
   })
-  const queryClient = useQueryDevtoolsContext().client
+  const queryDevtoolsContext = useQueryDevtoolsContext()
 
   return (
     <button
@@ -174,7 +174,10 @@ const ClearArrayButton = (props: {
       onClick={() => {
         const oldData = props.activeQuery.state.data
         const newData = updateNestedDataByPath(oldData, props.dataPath, [])
-        queryClient.setQueryData(props.activeQuery.queryKey, newData)
+        queryDevtoolsContext.client.setQueryData(
+          props.activeQuery.queryKey,
+          newData,
+        )
       }}
     >
       <List />
@@ -193,7 +196,7 @@ const DeleteItemButton = (props: {
   const styles = createMemo(() => {
     return theme() === 'dark' ? darkStyles(css) : lightStyles(css)
   })
-  const queryClient = useQueryDevtoolsContext().client
+  const queryDevtoolsContext = useQueryDevtoolsContext()
 
   return (
     <button
@@ -203,7 +206,10 @@ const DeleteItemButton = (props: {
       onClick={() => {
         const oldData = props.activeQuery.state.data
         const newData = deleteNestedDataByPath(oldData, props.dataPath)
-        queryClient.setQueryData(props.activeQuery.queryKey, newData)
+        queryDevtoolsContext.client.setQueryData(
+          props.activeQuery.queryKey,
+          newData,
+        )
       }}
     >
       <Trash />
@@ -223,7 +229,7 @@ const ToggleValueButton = (props: {
   const styles = createMemo(() => {
     return theme() === 'dark' ? darkStyles(css) : lightStyles(css)
   })
-  const queryClient = useQueryDevtoolsContext().client
+  const queryDevtoolsContext = useQueryDevtoolsContext()
 
   return (
     <button
@@ -243,7 +249,10 @@ const ToggleValueButton = (props: {
           props.dataPath,
           !props.value,
         )
-        queryClient.setQueryData(props.activeQuery.queryKey, newData)
+        queryDevtoolsContext.client.setQueryData(
+          props.activeQuery.queryKey,
+          newData,
+        )
       }}
     >
       <Check theme={theme()} checked={props.value} />
@@ -274,7 +283,7 @@ export default function Explorer(props: ExplorerProps) {
   const styles = createMemo(() => {
     return theme() === 'dark' ? darkStyles(css) : lightStyles(css)
   })
-  const queryClient = useQueryDevtoolsContext().client
+  const queryDevtoolsContext = useQueryDevtoolsContext()
 
   const [expanded, setExpanded] = createSignal(
     (props.defaultExpanded || []).includes(props.label),
@@ -495,7 +504,10 @@ export default function Explorer(props: ExplorerProps) {
                       : changeEvent.target.value,
                   )
 
-                  queryClient.setQueryData(props.activeQuery!.queryKey, newData)
+                  queryDevtoolsContext.client.setQueryData(
+                    props.activeQuery!.queryKey,
+                    newData,
+                  )
                 }}
               />
             </Show>
