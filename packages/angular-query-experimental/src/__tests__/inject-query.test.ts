@@ -347,7 +347,7 @@ describe('injectQuery', () => {
     keySignal.set('key12')
 
     void query.refetch()
-    await vi.advanceTimersByTimeAsync(10)
+    await vi.advanceTimersByTimeAsync(11)
 
     expect(fetchFn).toHaveBeenCalledTimes(2)
     expect(fetchFn).toHaveBeenNthCalledWith(

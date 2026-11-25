@@ -4,7 +4,6 @@ import {
   notifyManager,
 } from '@tanstack/query-core'
 import {
-  DestroyRef,
   Injector,
   NgZone,
   assertInInjectionContext,
@@ -25,6 +24,7 @@ import type {
   QueryFunction,
   QueryKey,
   QueryObserverOptions,
+  QueryObserverResult,
   ThrowOnError,
 } from '@tanstack/query-core'
 import type {
@@ -375,7 +375,6 @@ export function injectQueries<
 ): Signal<TCombinedResult> {
   !injector && assertInInjectionContext(injectQueries)
   return runInInjectionContext(injector ?? inject(Injector), () => {
-    const destroyRef = inject(DestroyRef)
     const ngZone = inject(NgZone)
     const queryClient = inject(QueryClient)
     const isRestoring = injectIsRestoring()
@@ -423,13 +422,27 @@ export function injectQueries<
       ),
     )
 
+    /**
+     * The queries most recently applied to the observer, with the matching
+     * combine function. Subscriber results are tagged with these queries.
+     */
+    let appliedQueries: {
+      queries: Array<QueryObserverOptions>
+      getCombinedResult: (r?: Array<QueryObserverResult>) => TCombinedResult
+    } | null = null
+
     // Do not notify on updates because of changes in the options because
     // these changes should already be reflected in the optimistic result.
     effect(() => {
-      observerSignal().setQueries(
-        defaultedQueries(),
-        optionsSignal() as QueriesObserverOptions<TCombinedResult>,
-      )
+      const observer = observerSignal()
+      const queries = defaultedQueries()
+      const options = optionsSignal() as QueriesObserverOptions<TCombinedResult>
+      const [_optimisticResult, getCombinedResult] = optimisticResultSignal()
+
+      untracked(() => {
+        appliedQueries = { queries, getCombinedResult }
+        observer.setQueries(queries, options)
+      })
     })
 
     const optimisticCombinedResultSignal = computed(() => {
@@ -438,31 +451,46 @@ export function injectQueries<
       return getCombinedResult(trackResult())
     })
 
-    const resultFromSubscriberSignal = signal<TCombinedResult | null>(null)
+    const resultFromSubscriberSignal = signal<{
+      queries: Array<QueryObserverOptions>
+      result: TCombinedResult
+    } | null>(null)
 
-    effect(() => {
+    effect((onCleanup) => {
       const observer = observerSignal()
-      const [_optimisticResult, getCombinedResult] = optimisticResultSignal()
+      const restoring = isRestoring()
 
       untracked(() => {
-        const unsubscribe = isRestoring()
+        const unsubscribe = restoring
           ? () => undefined
           : ngZone.runOutsideAngular(() =>
               observer.subscribe(
-                notifyManager.batchCalls((state) => {
-                  resultFromSubscriberSignal.set(getCombinedResult(state))
+                // The notification may be delivered after the queries have
+                // changed, so read the observer's current result instead of
+                // the one captured when the notification was scheduled.
+                notifyManager.batchCalls(() => {
+                  const applied = appliedQueries
+                  if (!applied) return
+                  resultFromSubscriberSignal.set({
+                    queries: applied.queries,
+                    result: applied.getCombinedResult(
+                      observer.getCurrentResult(),
+                    ),
+                  })
                 }),
               ),
             )
 
-        destroyRef.onDestroy(unsubscribe)
+        onCleanup(unsubscribe)
       })
     })
 
     const resultSignal = computed(() => {
       const subscriberResult = resultFromSubscriberSignal()
       const optimisticResult = optimisticCombinedResultSignal()
-      return subscriberResult ?? optimisticResult
+      return subscriberResult?.queries === defaultedQueries()
+        ? subscriberResult.result
+        : optimisticResult
     })
 
     return computed(() => {

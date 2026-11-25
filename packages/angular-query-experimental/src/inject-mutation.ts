@@ -1,6 +1,7 @@
 import {
   Injector,
   NgZone,
+  VERSION,
   assertInInjectionContext,
   computed,
   effect,
@@ -11,6 +12,7 @@ import {
 import {
   MutationObserver,
   QueryClient,
+  hashKey,
   noop,
   notifyManager,
   shouldThrowError,
@@ -18,7 +20,11 @@ import {
 import { signalProxy } from './signal-proxy'
 import { PENDING_TASKS } from './pending-tasks-compat'
 import type { PendingTaskRef } from './pending-tasks-compat'
-import type { DefaultError, MutationObserverResult } from '@tanstack/query-core'
+import type {
+  DefaultError,
+  MutationKey,
+  MutationObserverResult,
+} from '@tanstack/query-core'
 import type {
   CreateMutateFunction,
   CreateMutationOptions,
@@ -233,14 +239,15 @@ export function injectMutation<
   })
 
   /**
-   * Signal that contains result set by subscriber
+   * Signal that contains result set by subscriber, along with the mutation key
+   * the observer had when that result was read
    */
-  const resultFromSubscriberSignal = signal<MutationObserverResult<
-    TData,
-    TError,
-    TVariables,
-    TOnMutateResult
-  > | null>(null)
+  const resultFromSubscriberSignal = signal<{
+    mutationKey: MutationKey | undefined
+    result: MutationObserverResult<TData, TError, TVariables, TOnMutateResult>
+  } | null>(null)
+
+  let appliedMutationKey: MutationKey | undefined
 
   effect(
     () => {
@@ -248,11 +255,19 @@ export function injectMutation<
       const observerOptions = optionsSignal()
 
       untracked(() => {
+        appliedMutationKey = observerOptions.mutationKey
         observer.setOptions(observerOptions)
+        resultFromSubscriberSignal.set({
+          mutationKey: appliedMutationKey,
+          result: observer.getCurrentResult(),
+        })
       })
     },
     {
       injector,
+      // Set allowSignalWrites to support Angular < v19
+      // Set to undefined to avoid warning on newer versions
+      allowSignalWrites: VERSION.major < '19' || undefined,
     },
   )
 
@@ -286,7 +301,13 @@ export function injectMutation<
                   throw state.error
                 }
 
-                resultFromSubscriberSignal.set(state)
+                // The notification may be delivered after the options have
+                // changed, so read the observer's current result instead of
+                // the one captured when the notification was scheduled.
+                resultFromSubscriberSignal.set({
+                  mutationKey: appliedMutationKey,
+                  result: observer.getCurrentResult(),
+                })
               })
             }),
           ),
@@ -307,10 +328,21 @@ export function injectMutation<
   )
 
   const resultSignal = computed(() => {
+    const { mutationKey } = optionsSignal()
     const resultFromSubscriber = resultFromSubscriberSignal()
     const resultFromInitialOptions = resultFromInitialOptionsSignal()
 
-    const result = resultFromSubscriber ?? resultFromInitialOptions
+    // `MutationObserver.setOptions` resets the observer when the mutation key
+    // changes, so a result read under a different key is never current.
+    const isFromOtherMutationKey =
+      !!resultFromSubscriber?.mutationKey &&
+      !!mutationKey &&
+      hashKey(resultFromSubscriber.mutationKey) !== hashKey(mutationKey)
+
+    const result =
+      resultFromSubscriber && !isFromOtherMutationKey
+        ? resultFromSubscriber.result
+        : resultFromInitialOptions
 
     return {
       ...result,

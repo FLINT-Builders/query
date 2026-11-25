@@ -137,7 +137,10 @@ export function createBaseQuery<
                     ngZone.onError.emit(state.error)
                     throw state.error
                   }
-                  resultFromSubscriberSignal.set(state)
+                  // The notification may be delivered after the options have
+                  // changed, so read the observer's current result instead of
+                  // the one captured when the notification was scheduled.
+                  resultFromSubscriberSignal.set(observer.getCurrentResult())
                 })
               }),
             )
