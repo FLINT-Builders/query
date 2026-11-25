@@ -1,4 +1,3 @@
-import { serialize, stringify } from 'superjson'
 import { clsx as cx } from 'clsx'
 import {
   Index,
@@ -15,6 +14,8 @@ import { tokens } from './theme'
 import {
   deleteNestedDataByPath,
   displayValue,
+  isBulkEditable,
+  stringifyValue,
   updateNestedDataByPath,
 } from './utils'
 import {
@@ -119,7 +120,7 @@ const CopyButton = (props: { value: unknown }) => {
       onClick={
         copyState() === 'NoCopy'
           ? () => {
-              navigator.clipboard.writeText(stringify(props.value)).then(
+              navigator.clipboard.writeText(stringifyValue(props.value)).then(
                 () => {
                   setCopyState('SuccessCopy')
                   setTimeout(() => {
@@ -372,7 +373,7 @@ export default function Explorer(props: ExplorerProps) {
                 />
               </Show>
 
-              <Show when={!!props.onEdit && !serialize(props.value).meta}>
+              <Show when={!!props.onEdit && isBulkEditable(props.value)}>
                 <button
                   class={styles().actionButton}
                   title={'Bulk Edit Data'}

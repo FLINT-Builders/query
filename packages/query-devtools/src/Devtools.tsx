@@ -26,6 +26,7 @@ import {
   getQueryStatusColorByLabel,
   getQueryStatusLabel,
   getSidedProp,
+  isBulkEditable,
   mutationSortFns,
   sortFns,
 } from './utils'
@@ -776,7 +777,7 @@ export const ContentView: Component<ContentViewProps> = (props) => {
           ? curr.filter((item) => {
               const value = `${
                 item.options.mutationKey
-                  ? JSON.stringify(item.options.mutationKey) + ' - '
+                  ? displayValue(item.options.mutationKey) + ' - '
                   : ''
               }${new Date(item.state.submittedAt).toLocaleString()}`
               return rankItem(value, props.localStore.mutationFilter || '')
@@ -1582,7 +1583,7 @@ const MutationRow: Component<{ mutation: Mutation }> = (props) => {
         </div>
         <code class="tsqd-query-hash">
           <Show when={props.mutation.options.mutationKey}>
-            {JSON.stringify(props.mutation.options.mutationKey)} -{' '}
+            {displayValue(props.mutation.options.mutationKey)} -{' '}
           </Show>
           {new Date(props.mutation.state.submittedAt).toLocaleString()}
         </code>
@@ -1887,6 +1888,10 @@ const QueryDetails = () => {
         .find((query) => query.queryHash === selectedQueryHash())?.state.data
     },
     false,
+  )
+
+  const showDataEditor = createMemo(
+    () => dataMode() === 'edit' && isBulkEditable(activeQueryStateData()),
   )
 
   const statusLabel = createSubscribeToQueryCacheBatcher((queryCache) => {
@@ -2277,9 +2282,9 @@ const QueryDetails = () => {
           aria-level="2"
           class={cx(styles().detailsHeader, 'tsqd-query-details-header')}
         >
-          Data {dataMode() === 'view' ? 'Explorer' : 'Editor'}
+          Data {showDataEditor() ? 'Editor' : 'Explorer'}
         </div>
-        <Show when={dataMode() === 'view'}>
+        <Show when={!showDataEditor()}>
           <div
             style={{
               padding: tokens.size[2],
@@ -2296,7 +2301,7 @@ const QueryDetails = () => {
             />
           </div>
         </Show>
-        <Show when={dataMode() === 'edit'}>
+        <Show when={showDataEditor()}>
           <form
             class={cx(
               styles().devtoolsEditForm,

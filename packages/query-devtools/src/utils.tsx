@@ -1,4 +1,4 @@
-import { serialize } from 'superjson'
+import { serialize, stringify } from 'superjson'
 import { createSignal, onCleanup, onMount } from 'solid-js'
 import type { Mutation, Query } from '@tanstack/query-core'
 import type { DevtoolsPosition } from './contexts'
@@ -76,15 +76,135 @@ export function getQueryStatusColorByLabel(label: QueryStatusLabel) {
           : 'blue'
 }
 
+// superjson throws on these keys and recurses once per level of nesting, so
+// values that contain them or nest deeper than this never reach it.
+const MAX_SERIALIZE_DEPTH = 100
+const SUPERJSON_REJECTED_KEYS = new Set([
+  '__proto__',
+  'constructor',
+  'prototype',
+])
+
+function canUseSuperjson(value: unknown): boolean {
+  const visited = new Set<object>()
+  const stack: Array<[unknown, number]> = [[value, 0]]
+  while (stack.length) {
+    const [current, depth] = stack.pop()!
+    if (typeof current !== 'object' || current === null) continue
+    if (visited.has(current)) continue
+    if (depth > MAX_SERIALIZE_DEPTH) return false
+    visited.add(current)
+    if (ArrayBuffer.isView(current)) continue
+
+    const children: Array<[unknown, number]> = []
+    if (current instanceof Map) {
+      // superjson walks a Map as an array of [key, value] arrays
+      for (const [k, v] of current) {
+        children.push([k, depth + 2], [v, depth + 2])
+      }
+    } else if (current instanceof Set) {
+      for (const v of current) children.push([v, depth + 1])
+    } else {
+      for (const [k, v] of Object.entries(current)) {
+        if (SUPERJSON_REJECTED_KEYS.has(k)) return false
+        children.push([v, depth + 1])
+      }
+    }
+    for (let i = children.length - 1; i >= 0; i--) {
+      stack.push(children[i]!)
+    }
+  }
+  return true
+}
+
+function isSuperjsonSafe(value: unknown): boolean {
+  try {
+    return canUseSuperjson(value)
+  } catch {
+    return false
+  }
+}
+
+function toPlainJson(
+  value: unknown,
+  depth: number = 0,
+  ancestors: Array<object> = [],
+): unknown {
+  switch (typeof value) {
+    case 'undefined':
+    case 'function':
+      return null
+    case 'bigint':
+    case 'symbol':
+      return value.toString()
+    case 'number':
+      return Number.isFinite(value) ? value : String(value)
+    case 'object':
+      break
+    default:
+      return value
+  }
+  if (value === null) return null
+  if (value instanceof Date) {
+    return isNaN(value.getTime()) ? 'Invalid Date' : value.toISOString()
+  }
+  if (value instanceof RegExp) return String(value)
+  if (ancestors.includes(value)) return '[Circular]'
+  if (depth >= MAX_SERIALIZE_DEPTH) return '[Max depth exceeded]'
+
+  const next = (v: unknown) => toPlainJson(v, depth + 1, [...ancestors, value])
+  if (Array.isArray(value) || value instanceof Set) {
+    return Array.from(value, next)
+  }
+  if (value instanceof Map) {
+    return Array.from(value, ([k, v]) => [next(k), next(v)])
+  }
+  // Object.fromEntries keeps a `__proto__` key as an own data property
+  return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, next(v)]))
+}
+
+function toDisplayJson(value: unknown): unknown {
+  if (isSuperjsonSafe(value)) {
+    try {
+      return serialize(value).json
+    } catch {}
+  }
+  return toPlainJson(value)
+}
+
+/**
+ * Whether the value survives a `JSON.stringify` / `JSON.parse` round trip,
+ * which is what the bulk data editor relies on.
+ */
+export const isBulkEditable = (value: unknown) => {
+  if (!isSuperjsonSafe(value)) return false
+  try {
+    return !serialize(value).meta
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Stringifies the value for the clipboard, using superjson when it can
+ * represent the value and plain JSON otherwise.
+ */
+export const stringifyValue = (value: unknown) => {
+  if (isSuperjsonSafe(value)) {
+    try {
+      return stringify(value)
+    } catch {}
+  }
+  return JSON.stringify(toPlainJson(value))
+}
+
 /**
  * Displays a string regardless the type of the data
  * @param {unknown} value Value to be stringified
  * @param {boolean} beautify Formats json to multiline
  */
 export const displayValue = (value: unknown, beautify: boolean = false) => {
-  const { json } = serialize(value)
-
-  return JSON.stringify(json, null, beautify ? 2 : undefined)
+  return JSON.stringify(toDisplayJson(value), null, beautify ? 2 : undefined)
 }
 
 // Sorting functions
