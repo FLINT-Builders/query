@@ -318,9 +318,14 @@ export function useBaseQuery<
       (c) => {
         if (unsubscribe) {
           unsubscribe()
+          unsubscribe = null
         }
-        setObserver(new Observer(c, defaultedOptions()))
-        unsubscribe = createClientSubscriber()
+        const newObserver = new Observer(c, defaultedOptions())
+        observerResult = newObserver.getOptimisticResult(defaultedOptions())
+        setObserver(newObserver)
+        if (!isRestoring()) {
+          unsubscribe = createClientSubscriber()
+        }
       },
       {
         defer: true,

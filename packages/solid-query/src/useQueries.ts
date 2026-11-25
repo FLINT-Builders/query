@@ -301,20 +301,21 @@ export function useQueries<
     ),
   )
 
-  const observer = createMemo(
-    () =>
-      new QueriesObserver(
-        client(),
-        untrack(defaultedQueries),
-        untrack(() =>
+  const observer = createMemo(() => {
+    const currentClient = client()
+    return untrack(
+      () =>
+        new QueriesObserver(
+          currentClient,
+          defaultedQueries(),
           queriesOptions().combine
             ? ({
                 combine: queriesOptions().combine,
               } as QueriesObserverOptions<TCombinedResult>)
             : undefined,
         ),
-      ),
-  )
+    )
+  })
 
   const [state, setState] = createStore<TCombinedResult>(
     observer().getOptimisticResult(

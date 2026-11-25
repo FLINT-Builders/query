@@ -186,13 +186,16 @@ export function useMutation<
   const resolveClient = useQueryClientResolver(queryClient)
   const client = createMemo(() => resolveClient())
 
-  const observer = createMemo(
-    () =>
-      new MutationObserver<TData, TError, TVariables, TOnMutateResult>(
-        client(),
-        untrack(options),
-      ),
-  )
+  const observer = createMemo(() => {
+    const currentClient = client()
+    return untrack(
+      () =>
+        new MutationObserver<TData, TError, TVariables, TOnMutateResult>(
+          currentClient,
+          options(),
+        ),
+    )
+  })
 
   const mutateAsync: UseMutateAsyncFunction<
     TData,

@@ -584,30 +584,26 @@ describe('PersistQueryClientProvider', () => {
     render(() => <App />)
 
     await vi.advanceTimersByTimeAsync(10)
+    expect(screen.getByText('hydrated')).toBeInTheDocument()
+    await vi.advanceTimersByTimeAsync(10)
     expect(screen.getByText('queryFn2')).toBeInTheDocument()
 
     expect(queryFn1).toHaveBeenCalledTimes(0)
     expect(queryFn2).toHaveBeenCalledTimes(1)
     expect(onSuccess).toHaveBeenCalledTimes(1)
 
-    expect(states).toHaveLength(3)
+    expect(states).toStrictEqual([
+      { status: 'pending', fetchStatus: 'idle', data: undefined },
+      { status: 'success', fetchStatus: 'fetching', data: 'hydrated' },
+      { status: 'success', fetchStatus: 'idle', data: 'hydrated' },
+      { status: 'success', fetchStatus: 'fetching', data: 'hydrated' },
+      { status: 'success', fetchStatus: 'idle', data: 'queryFn2' },
+    ])
 
-    expect(states[0]).toStrictEqual({
-      status: 'pending',
-      fetchStatus: 'idle',
-      data: undefined,
-    })
-
-    expect(states[1]).toStrictEqual({
-      status: 'success',
-      fetchStatus: 'fetching',
-      data: 'hydrated',
-    })
-
-    expect(states[2]).toStrictEqual({
-      status: 'success',
-      fetchStatus: 'idle',
-      data: 'queryFn2',
-    })
+    const persisted = persister.restoreClient()
+    await vi.advanceTimersByTimeAsync(10)
+    expect((await persisted)?.clientState.queries[0]?.state.data).toBe(
+      'queryFn2',
+    )
   })
 })
