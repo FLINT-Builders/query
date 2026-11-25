@@ -1,4 +1,25 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks'
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'preact/hooks'
+import type { QueryClient } from '@tanstack/query-core'
+
+/**
+ * Returns an observer bound to `client`, creating a new one with
+ * `createObserver` whenever the resolved client changes. Observers read from
+ * and write to the caches of the client they were created with, so one must
+ * never outlive a change of client.
+ */
+export function useClientObserver<TObserver>(
+  client: QueryClient,
+  createObserver: () => TObserver,
+): TObserver {
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  return useMemo(createObserver, [client])
+}
 
 /**
  * This is taken from https://github.com/preactjs/preact/blob/main/compat/src/hooks.js#L8-L54

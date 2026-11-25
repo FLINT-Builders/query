@@ -20,6 +20,7 @@ import {
   fetchOptimistic,
   shouldSuspend,
 } from './suspense'
+import { useClientObserver } from './useClientObserver'
 import type {
   DefinedUseQueryResult,
   UseQueryOptions,
@@ -415,7 +416,8 @@ export function useQueries<
 
   useClearResetErrorBoundary(errorResetBoundary)
 
-  const [observer] = React.useState(
+  const observer = useClientObserver(
+    client,
     () =>
       new QueriesObserver<TCombinedResult>(
         client,

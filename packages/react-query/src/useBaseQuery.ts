@@ -15,6 +15,7 @@ import {
   fetchOptimistic,
   shouldSuspend,
 } from './suspense'
+import { useClientObserver } from './useClientObserver'
 import type {
   QueryClient,
   QueryKey,
@@ -83,7 +84,8 @@ export function useBaseQuery<
   ensurePreventErrorBoundaryRetry(defaultedOptions, errorResetBoundary, query)
   useClearResetErrorBoundary(errorResetBoundary)
 
-  const [observer] = React.useState(
+  const observer = useClientObserver(
+    client,
     () =>
       new Observer<TQueryFnData, TError, TData, TQueryData, TQueryKey>(
         client,

@@ -5,15 +5,16 @@ import {
   shouldThrowError,
 } from '@tanstack/query-core'
 import type { DefaultError, QueryClient } from '@tanstack/query-core'
-import { useCallback, useEffect, useState } from 'preact/hooks'
+import { useCallback, useEffect, useLayoutEffect, useRef } from 'preact/hooks'
 
 import { useQueryClient } from './QueryClientProvider'
 import type {
+  UseMutateAsyncFunction,
   UseMutateFunction,
   UseMutationOptions,
   UseMutationResult,
 } from './types'
-import { useSyncExternalStore } from './utils'
+import { useClientObserver, useSyncExternalStore } from './utils'
 
 // HOOK
 
@@ -200,13 +201,21 @@ export function useMutation<
 ): UseMutationResult<TData, TError, TVariables, TOnMutateResult> {
   const client = useQueryClient(queryClient)
 
-  const [observer] = useState(
+  const observer = useClientObserver(
+    client,
     () =>
       new MutationObserver<TData, TError, TVariables, TOnMutateResult>(
         client,
         options,
       ),
   )
+
+  // `mutate` and `mutateAsync` may be called through references kept from an
+  // earlier render, so they always go through the committed observer.
+  const committedObserver = useRef(observer)
+  useLayoutEffect(() => {
+    committedObserver.current = observer
+  }, [observer])
 
   useEffect(() => {
     observer.setOptions(options)
@@ -221,6 +230,17 @@ export function useMutation<
     () => observer.getCurrentResult(),
   )
 
+  const mutateAsync = useCallback<
+    UseMutateAsyncFunction<TData, TError, TVariables, TOnMutateResult>
+  >(
+    (
+      ...args: Parameters<
+        UseMutateAsyncFunction<TData, TError, TVariables, TOnMutateResult>
+      >
+    ) => committedObserver.current.mutate(args[0] as TVariables, args[1]),
+    [],
+  )
+
   const mutate = useCallback<
     UseMutateFunction<TData, TError, TVariables, TOnMutateResult>
   >(
@@ -229,9 +249,9 @@ export function useMutation<
         UseMutateFunction<TData, TError, TVariables, TOnMutateResult>
       >
     ) => {
-      observer.mutate(args[0] as TVariables, args[1]).catch(noop)
+      mutateAsync(...args).catch(noop)
     },
-    [observer],
+    [mutateAsync],
   )
 
   if (
@@ -241,5 +261,5 @@ export function useMutation<
     throw result.error
   }
 
-  return { ...result, mutate, mutateAsync: result.mutate }
+  return { ...result, mutate, mutateAsync }
 }

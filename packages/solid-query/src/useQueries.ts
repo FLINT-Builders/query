@@ -10,6 +10,7 @@ import {
   on,
   onCleanup,
   onMount,
+  untrack,
 } from 'solid-js'
 import { useQueryClientResolver } from './QueryClientProvider'
 import { useIsRestoring } from './isRestoring'
@@ -300,18 +301,23 @@ export function useQueries<
     ),
   )
 
-  const observer = new QueriesObserver(
-    client(),
-    defaultedQueries(),
-    queriesOptions().combine
-      ? ({
-          combine: queriesOptions().combine,
-        } as QueriesObserverOptions<TCombinedResult>)
-      : undefined,
+  const observer = createMemo(
+    () =>
+      new QueriesObserver(
+        client(),
+        untrack(defaultedQueries),
+        untrack(() =>
+          queriesOptions().combine
+            ? ({
+                combine: queriesOptions().combine,
+              } as QueriesObserverOptions<TCombinedResult>)
+            : undefined,
+        ),
+      ),
   )
 
   const [state, setState] = createStore<TCombinedResult>(
-    observer.getOptimisticResult(
+    observer().getOptimisticResult(
       defaultedQueries(),
       (queriesOptions() as QueriesObserverOptions<TCombinedResult>).combine,
     )[1](),
@@ -322,7 +328,7 @@ export function useQueries<
       () => queriesOptions().queries.length,
       () =>
         setState(
-          observer.getOptimisticResult(
+          observer().getOptimisticResult(
             defaultedQueries(),
             (queriesOptions() as QueriesObserverOptions<TCombinedResult>)
               .combine,
@@ -346,18 +352,39 @@ export function useQueries<
     ),
   )
 
-  batch(() => {
-    const dataResources_ = dataResources()
-    for (let index = 0; index < dataResources_.length; index++) {
-      const dataResource = dataResources_[index]!
-      dataResource[1].mutate(() => unwrap(state[index]!.data))
-      dataResource[1].refetch()
-    }
-  })
+  const refreshDataResources = () => {
+    batch(() => {
+      const dataResources_ = dataResources()
+      for (let index = 0; index < dataResources_.length; index++) {
+        const dataResource = dataResources_[index]!
+        dataResource[1].mutate(() => unwrap(state[index]!.data))
+        dataResource[1].refetch()
+      }
+    })
+  }
+
+  refreshDataResources()
+
+  createComputed(
+    on(
+      observer,
+      (obs) => {
+        setState(
+          obs.getOptimisticResult(
+            defaultedQueries(),
+            (queriesOptions() as QueriesObserverOptions<TCombinedResult>)
+              .combine,
+          )[1](),
+        )
+        refreshDataResources()
+      },
+      { defer: true },
+    ),
+  )
 
   let taskQueue: Array<() => void> = []
   const subscribeToObserver = () =>
-    observer.subscribe((result) => {
+    observer().subscribe((result) => {
       taskQueue.push(() => {
         batch(() => {
           const dataResources_ = dataResources()
@@ -389,7 +416,7 @@ export function useQueries<
   onCleanup(unsubscribe)
 
   onMount(() => {
-    observer.setQueries(
+    observer().setQueries(
       defaultedQueries(),
       queriesOptions().combine
         ? ({
@@ -400,7 +427,7 @@ export function useQueries<
   })
 
   createComputed(() => {
-    observer.setQueries(
+    observer().setQueries(
       defaultedQueries(),
       queriesOptions().combine
         ? ({

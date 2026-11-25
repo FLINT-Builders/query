@@ -319,9 +319,8 @@ export function useBaseQuery<
         if (unsubscribe) {
           unsubscribe()
         }
-        const newObserver = new Observer(c, defaultedOptions())
+        setObserver(new Observer(c, defaultedOptions()))
         unsubscribe = createClientSubscriber()
-        setObserver(newObserver)
       },
       {
         defer: true,
