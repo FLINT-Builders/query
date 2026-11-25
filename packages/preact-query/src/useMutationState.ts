@@ -164,30 +164,46 @@ export function useMutationState<
 ): Array<TResult> {
   const mutationCache = useQueryClient(queryClient).getMutationCache()
   const optionsRef = useRef(options)
-  const result = useRef<Array<TResult>>(null)
-  if (result.current === null) {
-    result.current = getResult(mutationCache, options)
-  }
+  // Keyed by cache: a swapped-in QueryClient does not emit cache events, so a
+  // result from the previous cache must never be returned for the new one.
+  const result = useRef<{
+    mutationCache: MutationCache
+    value: Array<TResult>
+  }>(null)
 
   useEffect(() => {
     optionsRef.current = options
   })
 
+  const getSnapshot = () => {
+    if (result.current?.mutationCache !== mutationCache) {
+      result.current = {
+        mutationCache,
+        value: getResult(mutationCache, options),
+      }
+    }
+    return result.current.value
+  }
+
   return useSyncExternalStore(
     useCallback(
       (onStoreChange) =>
         mutationCache.subscribe(() => {
+          const previous =
+            result.current?.mutationCache === mutationCache
+              ? result.current.value
+              : undefined
           const nextResult = replaceEqualDeep(
-            result.current,
+            previous,
             getResult(mutationCache, optionsRef.current),
           )
-          if (result.current !== nextResult) {
-            result.current = nextResult
+          if (previous !== nextResult) {
+            result.current = { mutationCache, value: nextResult }
             notifyManager.schedule(onStoreChange)
           }
         }),
       [mutationCache],
     ),
-    () => result.current,
-  )!
+    getSnapshot,
+  )
 }
