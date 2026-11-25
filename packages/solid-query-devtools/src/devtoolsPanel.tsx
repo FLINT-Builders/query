@@ -48,8 +48,7 @@ export interface DevtoolsPanelOptions {
 }
 
 export default function SolidQueryDevtoolsPanel(props: DevtoolsPanelOptions) {
-  const queryClient = useQueryClient(props.client)
-  const client = createMemo(() => queryClient)
+  const client = createMemo(() => useQueryClient(props.client))
   let ref!: HTMLDivElement
   const { errorTypes, styleNonce, shadowDOMTarget, hideDisabledQueries } = props
   const devtools = new TanstackQueryDevtoolsPanel({

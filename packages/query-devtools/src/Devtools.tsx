@@ -2,6 +2,7 @@ import {
   For,
   Show,
   batch,
+  createComputed,
   createEffect,
   createMemo,
   createSignal,
@@ -1848,7 +1849,7 @@ const QueryDetails = () => {
   const { colors } = tokens
   const t = (light: string, dark: string) => (theme() === 'dark' ? dark : light)
 
-  const queryClient = useQueryDevtoolsContext().client
+  const queryDevtoolsContext = useQueryDevtoolsContext()
 
   const [restoringLoading, setRestoringLoading] = createSignal(false)
   const [dataMode, setDataMode] = createSignal<'view' | 'edit'>('view')
@@ -2078,7 +2079,7 @@ const QueryDetails = () => {
                 type: 'INVALIDATE',
                 queryHash: activeQuery()?.queryHash,
               })
-              queryClient.invalidateQueries({
+              queryDevtoolsContext.client.invalidateQueries({
                 queryKey: activeQuery()?.queryKey,
                 exact: true,
               })
@@ -2106,7 +2107,7 @@ const QueryDetails = () => {
                 type: 'RESET',
                 queryHash: activeQuery()?.queryHash,
               })
-              queryClient.resetQueries({
+              queryDevtoolsContext.client.resetQueries({
                 queryKey: activeQuery()?.queryKey,
                 exact: true,
               })
@@ -2134,7 +2135,7 @@ const QueryDetails = () => {
                 type: 'REMOVE',
                 queryHash: activeQuery()?.queryHash,
               })
-              queryClient.removeQueries({
+              queryDevtoolsContext.client.removeQueries({
                 queryKey: activeQuery()?.queryKey,
                 exact: true,
               })
@@ -2217,7 +2218,7 @@ const QueryDetails = () => {
                     type: 'RESTORE_ERROR',
                     queryHash: activeQuery()?.queryHash,
                   })
-                  queryClient.resetQueries({
+                  queryDevtoolsContext.client.resetQueries({
                     queryKey: activeQuery()?.queryKey,
                   })
                 }
@@ -2583,21 +2584,21 @@ const setupQueryCacheSubscription = () => {
     return client.getQueryCache()
   })
 
-  const unsubscribe = queryCache().subscribe((q) => {
-    batch(() => {
-      for (const [callback, value] of queryCacheMap.entries()) {
-        if (!value.shouldUpdate(q)) continue
-        value.setter(callback(queryCache))
-      }
+  createComputed(() => {
+    const unsubscribe = queryCache().subscribe((q) => {
+      batch(() => {
+        for (const [callback, value] of queryCacheMap.entries()) {
+          if (!value.shouldUpdate(q)) continue
+          value.setter(callback(queryCache))
+        }
+      })
     })
+    onCleanup(unsubscribe)
   })
 
   onCleanup(() => {
     queryCacheMap.clear()
-    unsubscribe()
   })
-
-  return unsubscribe
 }
 
 const createSubscribeToQueryCacheBatcher = <T,>(
@@ -2642,20 +2643,20 @@ const setupMutationCacheSubscription = () => {
     return client.getMutationCache()
   })
 
-  const unsubscribe = mutationCache().subscribe(() => {
-    for (const [callback, setter] of mutationCacheMap.entries()) {
-      queueMicrotask(() => {
-        setter(callback(mutationCache))
-      })
-    }
+  createComputed(() => {
+    const unsubscribe = mutationCache().subscribe(() => {
+      for (const [callback, setter] of mutationCacheMap.entries()) {
+        queueMicrotask(() => {
+          setter(callback(mutationCache))
+        })
+      }
+    })
+    onCleanup(unsubscribe)
   })
 
   onCleanup(() => {
     mutationCacheMap.clear()
-    unsubscribe()
   })
-
-  return unsubscribe
 }
 
 const createSubscribeToMutationCacheBatcher = <T,>(
