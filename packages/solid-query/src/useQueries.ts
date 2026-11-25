@@ -1,4 +1,4 @@
-import { QueriesObserver, noop } from '@tanstack/query-core'
+import { QueriesObserver } from '@tanstack/query-core'
 import { createStore, unwrap } from 'solid-js/store'
 import {
   batch,
@@ -379,14 +379,10 @@ export function useQueries<
       })
     })
 
-  let unsubscribe: () => void = noop
-  createComputed<() => void>((cleanup) => {
-    cleanup?.()
-    unsubscribe = isRestoring() ? noop : subscribeToObserver()
-    // cleanup needs to be scheduled after synchronous effects take place
-    return () => queueMicrotask(unsubscribe)
+  createComputed(() => {
+    if (isRestoring()) return
+    onCleanup(subscribeToObserver())
   })
-  onCleanup(unsubscribe)
 
   onMount(() => {
     observer.setQueries(
