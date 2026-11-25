@@ -36,18 +36,62 @@
     queryClient: client,
   })
 
-  $effect(() => {
-    return isRestoring.current ? () => {} : persistQueryClientSubscribe(options)
-  })
+  let hasRestored = false
 
   $effect(() => {
+    const restoreOptions = options
+    let isCurrent = true
+
     isRestoring.current = true
-    persistQueryClientRestore(options)
+    // Fetches started before this restore must not write into the cache
+    // that the new snapshot is about to be hydrated into.
+    if (hasRestored) {
+      void restoreOptions.queryClient.cancelQueries()
+    }
+    hasRestored = true
+
+    const { persister } = restoreOptions
+    persistQueryClientRestore({
+      ...restoreOptions,
+      persister: {
+        persistClient: (persistedClient) =>
+          persister.persistClient(persistedClient),
+        restoreClient: async () => {
+          const persistedClient = await persister.restoreClient()
+          if (!persistedClient || !isCurrent) return undefined
+          return {
+            ...persistedClient,
+            // Read synchronously by `hydrate`, so a restore superseded after
+            // this resolved still hydrates nothing.
+            get clientState() {
+              return isCurrent
+                ? persistedClient.clientState
+                : { mutations: [], queries: [] }
+            },
+          }
+        },
+        removeClient: async () => {
+          if (isCurrent) await persister.removeClient()
+        },
+      },
+    })
       .then(() => props.onSuccess?.())
       .catch(() => props.onError?.())
       .finally(() => {
-        isRestoring.current = false
+        if (isCurrent) {
+          isRestoring.current = false
+        }
       })
+
+    return () => {
+      isCurrent = false
+    }
+  })
+
+  // Declared after the restore effect so that, when the options change,
+  // restoring is already true again before this effect re-runs.
+  $effect(() => {
+    return isRestoring.current ? () => {} : persistQueryClientSubscribe(options)
   })
 </script>
 
