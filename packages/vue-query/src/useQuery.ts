@@ -36,7 +36,7 @@ export type UseQueryDefinedReturnType<TData, TError> = UseBaseQueryReturnType<
  * @param options - The {@link DefinedInitialQueryOptions} to use — everything you can pass to `useQuery`, with
  * `initialData` set.
  * @param queryClient - Use this to use a custom `QueryClient`. Otherwise, the one provided by `VueQueryPlugin`
- * will be used.
+ * will be used. Pass a `ref` or getter to switch clients while the component stays mounted.
  * @returns The current query result, typed so that `data` is never `undefined` (`status` never resolves to
  * `pending` in this overload's type, since `initialData` guarantees data upfront).
  *
@@ -69,7 +69,7 @@ export function useQuery<
   TQueryKey extends QueryKey = QueryKey,
 >(
   options: DefinedInitialQueryOptions<TQueryFnData, TError, TData, TQueryKey>,
-  queryClient?: QueryClient,
+  queryClient?: MaybeRefOrGetter<QueryClient>,
 ): UseQueryDefinedReturnType<TData, TError>
 
 /**
@@ -80,7 +80,7 @@ export function useQuery<
  *
  * @param options - The {@link UndefinedInitialQueryOptions} to use — everything you can pass to `useQuery`.
  * @param queryClient - Use this to use a custom `QueryClient`. Otherwise, the one provided by `VueQueryPlugin`
- * will be used.
+ * will be used. Pass a `ref` or getter to switch clients while the component stays mounted.
  * @returns The current query result. `status` is `pending` if there is no cached data to display, `error` if
  * the last fetch attempt failed, or `success` if the query has data to display.
  *
@@ -210,7 +210,7 @@ export function useQuery<
   TQueryKey extends QueryKey = QueryKey,
 >(
   options: UndefinedInitialQueryOptions<TQueryFnData, TError, TData, TQueryKey>,
-  queryClient?: QueryClient,
+  queryClient?: MaybeRefOrGetter<QueryClient>,
 ): UseQueryReturnType<TData, TError>
 
 /**
@@ -227,7 +227,7 @@ export function useQuery<
  *
  * @param options - A `ref`, plain value, or reactive getter resolving to the {@link UseQueryOptions} to use.
  * @param queryClient - Use this to use a custom `QueryClient`. Otherwise, the one provided by `VueQueryPlugin`
- * will be used.
+ * will be used. Pass a `ref` or getter to switch clients while the component stays mounted.
  * @returns The current query result, with `data` typed as possibly `undefined`.
  *
  * @example
@@ -288,7 +288,7 @@ export function useQuery<
   options: MaybeRefOrGetter<
     UseQueryOptions<TQueryFnData, TError, TData, TQueryFnData, TQueryKey>
   >,
-  queryClient?: QueryClient,
+  queryClient?: MaybeRefOrGetter<QueryClient>,
 ): UseQueryReturnType<TData, TError>
 
 export function useQuery<
@@ -300,7 +300,7 @@ export function useQuery<
   options: MaybeRefOrGetter<
     UseQueryOptions<TQueryFnData, TError, TData, TQueryFnData, TQueryKey>
   >,
-  queryClient?: QueryClient,
+  queryClient?: MaybeRefOrGetter<QueryClient>,
 ):
   | UseQueryReturnType<TData, TError>
   | UseQueryDefinedReturnType<TData, TError> {

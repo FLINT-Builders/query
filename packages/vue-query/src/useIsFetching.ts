@@ -1,9 +1,16 @@
-import { getCurrentScope, onScopeDispose, ref, watchEffect } from 'vue-demi'
-import { useQueryClient } from './useQueryClient'
+import {
+  getCurrentScope,
+  onScopeDispose,
+  ref,
+  watch,
+  watchEffect,
+} from 'vue-demi'
+import { noop } from '@tanstack/query-core'
+import { useQueryClientRef } from './useQueryClientRef'
 import { cloneDeepUnref } from './utils'
 import type { Ref } from 'vue-demi'
 import type { QueryFilters } from '@tanstack/query-core'
-import type { MaybeRefDeep } from './types'
+import type { MaybeRefDeep, MaybeRefOrGetter } from './types'
 import type { QueryClient } from './queryClient'
 
 export type UseIsFetchingFilters =
@@ -19,7 +26,7 @@ export type UseIsFetchingFilters =
  *
  * @param fetchingFilters - The {@link QueryFilters} to narrow down the matched queries.
  * @param queryClient - Use this to use a custom `QueryClient`. Otherwise, the one provided by `VueQueryPlugin`
- * will be used.
+ * will be used. Pass a `ref` or getter to switch clients while the component stays mounted.
  * @returns A `ref` to the `number` of the queries that your application is currently loading or fetching in
  * the background.
  *
@@ -53,7 +60,7 @@ export type UseIsFetchingFilters =
  */
 export function useIsFetching(
   fetchingFilters: UseIsFetchingFilters = {},
-  queryClient?: QueryClient,
+  queryClient?: MaybeRefOrGetter<QueryClient>,
 ): Ref<number> {
   if (process.env.NODE_ENV === 'development') {
     if (!getCurrentScope()) {
@@ -63,7 +70,7 @@ export function useIsFetching(
     }
   }
 
-  const client = queryClient || useQueryClient()
+  const client = useQueryClientRef(queryClient)
 
   const isFetching = ref()
 
@@ -72,10 +79,19 @@ export function useIsFetching(
       typeof fetchingFilters === 'function'
         ? fetchingFilters()
         : fetchingFilters
-    isFetching.value = client.isFetching(cloneDeepUnref(resolvedFilters))
+    isFetching.value = client.value.isFetching(cloneDeepUnref(resolvedFilters))
   }
 
-  const unsubscribe = client.getQueryCache().subscribe(listener)
+  let unsubscribe: () => void = noop
+
+  watch(
+    client,
+    (currentClient) => {
+      unsubscribe()
+      unsubscribe = currentClient.getQueryCache().subscribe(listener)
+    },
+    { immediate: true, flush: 'sync' },
+  )
 
   watchEffect(listener)
 

@@ -9,8 +9,8 @@ import {
   toRefs,
   watch,
 } from 'vue-demi'
-import { shouldThrowError } from '@tanstack/query-core'
-import { useQueryClient } from './useQueryClient'
+import { noop, shouldThrowError } from '@tanstack/query-core'
+import { useQueryClientRef } from './useQueryClientRef'
 import { cloneDeepUnref, updateState } from './utils'
 import type { Ref } from 'vue-demi'
 import type {
@@ -56,7 +56,7 @@ type UseQueryOptionsGeneric<
  * @param Observer - The observer class from query-core (`QueryObserver` or `InfiniteQueryObserver`).
  * @param options - A `ref`, plain value, or reactive getter resolving to the query options.
  * @param queryClient - Use this to use a custom `QueryClient`. Otherwise, the one provided by `VueQueryPlugin`
- * will be used.
+ * will be used. Pass a `ref` or getter to switch clients while the component stays mounted.
  */
 export function useBaseQuery<
   TQueryFnData,
@@ -77,7 +77,7 @@ export function useBaseQuery<
       TPageParam
     >
   >,
-  queryClient?: QueryClient,
+  queryClient?: MaybeRefOrGetter<QueryClient>,
 ): UseBaseQueryReturnType<TData, TError> {
   if (process.env.NODE_ENV === 'development') {
     if (!getCurrentScope()) {
@@ -87,7 +87,7 @@ export function useBaseQuery<
     }
   }
 
-  const client = queryClient || useQueryClient()
+  const client = useQueryClientRef(queryClient)
 
   const defaultedOptions = computed(() => {
     let resolvedOptions = options
@@ -106,43 +106,63 @@ export function useBaseQuery<
       TData,
       TQueryData,
       TQueryKey
-    > = client.defaultQueryOptions(clonedOptions)
+    > = client.value.defaultQueryOptions(clonedOptions)
 
-    defaulted._optimisticResults = client.isRestoring?.value
+    defaulted._optimisticResults = client.value.isRestoring?.value
       ? 'isRestoring'
       : 'optimistic'
 
     return defaulted
   })
 
-  const observer = new Observer(client, defaultedOptions.value)
+  let observerClient = client.value
+  let observer = new Observer(observerClient, defaultedOptions.value)
   // @ts-expect-error
   const state = defaultedOptions.value.shallow
     ? shallowReactive(observer.getCurrentResult())
     : reactive(observer.getCurrentResult())
 
-  let unsubscribe = () => {
-    // noop
+  let unsubscribe: () => void = noop
+
+  const subscribe = () => {
+    unsubscribe()
+    unsubscribe = observer.subscribe((result) => {
+      updateState(state, result)
+    })
   }
 
-  if (client.isRestoring) {
-    watch(
-      client.isRestoring,
-      (isRestoring) => {
-        if (!isRestoring) {
-          unsubscribe()
-          unsubscribe = observer.subscribe((result) => {
-            updateState(state, result)
-          })
-        }
-      },
-      { immediate: true },
-    )
+  // Every read and write goes through the observer returned here, so it is always bound to the current client.
+  const getObserver = () => {
+    const currentClient = client.value
+    if (currentClient !== observerClient) {
+      unsubscribe()
+      unsubscribe = noop
+      observerClient = currentClient
+      observer = new Observer(currentClient, defaultedOptions.value)
+      updateState(state, observer.getCurrentResult())
+      if (currentClient.isRestoring && !currentClient.isRestoring.value) {
+        subscribe()
+      }
+    }
+    return observer
   }
+
+  watch(client, () => getObserver(), { flush: 'sync' })
+
+  watch(
+    () => client.value.isRestoring?.value,
+    (isRestoring) => {
+      if (isRestoring === false) {
+        subscribe()
+      }
+    },
+    { immediate: true },
+  )
 
   const updater = () => {
-    observer.setOptions(defaultedOptions.value)
-    updateState(state, observer.getCurrentResult())
+    const currentObserver = getObserver()
+    currentObserver.setOptions(defaultedOptions.value)
+    updateState(state, currentObserver.getCurrentResult())
   }
 
   watch(defaultedOptions, updater)
@@ -154,7 +174,7 @@ export function useBaseQuery<
   // fix #5910
   const refetch = (...args: Parameters<(typeof state)['refetch']>) => {
     updater()
-    return state.refetch(...args)
+    return getObserver().refetch(...args)
   }
 
   const suspense = () => {
@@ -165,25 +185,26 @@ export function useBaseQuery<
         }
         const run = () => {
           if (defaultedOptions.value.enabled !== false) {
+            const currentObserver = getObserver()
             // fix #6133
-            observer.setOptions(defaultedOptions.value)
-            const optimisticResult = observer.getOptimisticResult(
+            currentObserver.setOptions(defaultedOptions.value)
+            const optimisticResult = currentObserver.getOptimisticResult(
               defaultedOptions.value,
             )
             if (optimisticResult.isStale) {
               stopWatch()
-              observer
+              currentObserver
                 .fetchOptimistic(defaultedOptions.value)
                 .then(resolve, (error: TError) => {
                   if (
                     shouldThrowError(defaultedOptions.value.throwOnError, [
                       error,
-                      observer.getCurrentQuery(),
+                      currentObserver.getCurrentQuery(),
                     ])
                   ) {
                     reject(error)
                   } else {
-                    resolve(observer.getCurrentResult())
+                    resolve(currentObserver.getCurrentResult())
                   }
                 })
             } else {
@@ -209,7 +230,7 @@ export function useBaseQuery<
         !state.isFetching &&
         shouldThrowError(defaultedOptions.value.throwOnError, [
           error as TError,
-          observer.getCurrentQuery(),
+          getObserver().getCurrentQuery(),
         ])
       ) {
         throw error
@@ -225,7 +246,11 @@ export function useBaseQuery<
   const object: any = toRefs(readonlyState)
   for (const key in state) {
     if (typeof state[key as keyof typeof state] === 'function') {
-      object[key] = state[key as keyof typeof state]
+      // Result methods are bound to the observer that created them, so delegate to the current one.
+      object[key] = (...args: Array<any>) => {
+        getObserver()
+        return (state as any)[key](...args)
+      }
     }
   }
 

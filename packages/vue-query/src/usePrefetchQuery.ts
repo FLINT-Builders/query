@@ -1,6 +1,6 @@
 import { getCurrentScope, unref, watchEffect } from 'vue-demi'
 import { noop } from '@tanstack/query-core'
-import { useQueryClient } from './useQueryClient'
+import { useQueryClientRef } from './useQueryClientRef'
 import { cloneDeepUnref } from './utils'
 import type {
   DefaultError,
@@ -62,7 +62,7 @@ function isGetter<T>(value: MaybeRefOrGetter<T>): value is () => T {
  * @param options - A `ref`, plain value, or reactive getter resolving to the {@link UsePrefetchQueryOptions} to
  * use — everything you can pass to `queryClient.query`.
  * @param queryClient - Use this to use a custom `QueryClient`. Otherwise, the one provided by `VueQueryPlugin`
- * will be used.
+ * will be used. Pass a `ref` or getter to switch clients while the component stays mounted.
  * @returns `void` — nothing is returned.
  *
  * @example
@@ -101,7 +101,7 @@ export function usePrefetchQuery<
       >
     >
   >,
-  queryClient?: QueryClient,
+  queryClient?: MaybeRefOrGetter<QueryClient>,
 ): void {
   if (process.env.NODE_ENV === 'development') {
     if (!getCurrentScope()) {
@@ -111,9 +111,10 @@ export function usePrefetchQuery<
     }
   }
 
-  const client = queryClient || useQueryClient()
+  const clientRef = useQueryClientRef(queryClient)
 
   watchEffect(() => {
+    const client = clientRef.value
     const resolvedOptions = isGetter(options) ? options() : unref(options)
     const clonedOptions: UsePrefetchQueryOptions<
       TQueryFnData,

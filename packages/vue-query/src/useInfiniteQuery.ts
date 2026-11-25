@@ -82,7 +82,7 @@ export type UseInfiniteQueryReturnType<TData, TError> = UseBaseQueryReturnType<
  * @param options - The {@link DefinedInitialDataInfiniteOptions} to use — everything you can pass to
  * `useInfiniteQuery`, with `initialData` set.
  * @param queryClient - Use this to use a custom `QueryClient`. Otherwise, the one provided by `VueQueryPlugin`
- * will be used.
+ * will be used. Pass a `ref` or getter to switch clients while the component stays mounted.
  * @returns The same properties as `useQuery`, with the addition of `fetchNextPage`, `fetchPreviousPage`,
  * `hasNextPage`, `hasPreviousPage`, `isFetchingNextPage`, and `isFetchingPreviousPage`. `data.value.pages` and
  * `data.value.pageParams` are also added, as long as a `select` doesn't change `TData` away from its default
@@ -130,7 +130,7 @@ export function useInfiniteQuery<
       TPageParam
     >
   >,
-  queryClient?: QueryClient,
+  queryClient?: MaybeRefOrGetter<QueryClient>,
 ): UseInfiniteQueryReturnType<TData, TError>
 
 /**
@@ -147,7 +147,7 @@ export function useInfiniteQuery<
  * @param options - The {@link UndefinedInitialDataInfiniteOptions} to use — everything you can pass to
  * `useInfiniteQuery`.
  * @param queryClient - Use this to use a custom `QueryClient`. Otherwise, the one provided by `VueQueryPlugin`
- * will be used.
+ * will be used. Pass a `ref` or getter to switch clients while the component stays mounted.
  * @returns The same properties as `useQuery`, with the addition of `fetchNextPage`, `fetchPreviousPage`,
  * `hasNextPage`, `hasPreviousPage`, `isFetchingNextPage`, and `isFetchingPreviousPage`. `data.value.pages` and
  * `data.value.pageParams` are also added, as long as a `select` doesn't change `TData` away from its default
@@ -264,7 +264,7 @@ export function useInfiniteQuery<
       TPageParam
     >
   >,
-  queryClient?: QueryClient,
+  queryClient?: MaybeRefOrGetter<QueryClient>,
 ): UseInfiniteQueryReturnType<TData, TError>
 
 /**
@@ -279,7 +279,7 @@ export function useInfiniteQuery<
  * @param options - A `ref`, plain value, or reactive getter resolving to the {@link UseInfiniteQueryOptions} to
  * use.
  * @param queryClient - Use this to use a custom `QueryClient`. Otherwise, the one provided by `VueQueryPlugin`
- * will be used.
+ * will be used. Pass a `ref` or getter to switch clients while the component stays mounted.
  * @returns The same properties as `useQuery`, with the addition of `fetchNextPage`, `fetchPreviousPage`,
  * `hasNextPage`, `hasPreviousPage`, `isFetchingNextPage`, and `isFetchingPreviousPage`.
  *
@@ -354,12 +354,12 @@ export function useInfiniteQuery<
   options: MaybeRefOrGetter<
     UseInfiniteQueryOptions<TQueryFnData, TError, TData, TQueryKey, TPageParam>
   >,
-  queryClient?: QueryClient,
+  queryClient?: MaybeRefOrGetter<QueryClient>,
 ): UseInfiniteQueryReturnType<TData, TError>
 
 export function useInfiniteQuery(
   options: MaybeRefOrGetter<UseInfiniteQueryOptions>,
-  queryClient?: QueryClient,
+  queryClient?: MaybeRefOrGetter<QueryClient>,
 ) {
   return useBaseQuery(
     InfiniteQueryObserver as typeof QueryObserver,

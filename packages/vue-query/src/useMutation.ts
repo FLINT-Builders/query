@@ -11,7 +11,7 @@ import {
 } from 'vue-demi'
 import { MutationObserver, shouldThrowError } from '@tanstack/query-core'
 import { cloneDeepUnref, updateState } from './utils'
-import { useQueryClient } from './useQueryClient'
+import { useQueryClientRef } from './useQueryClientRef'
 import type { ToRefs } from 'vue-demi'
 import type {
   DefaultError,
@@ -19,7 +19,7 @@ import type {
   MutateFunction,
   MutationObserverResult,
 } from '@tanstack/query-core'
-import type { MaybeRefDeep, MutationOptions } from './types'
+import type { MaybeRefDeep, MaybeRefOrGetter, MutationOptions } from './types'
 import type { QueryClient } from './queryClient'
 
 type MutationResult<TData, TError, TVariables, TOnMutateResult> =
@@ -78,7 +78,7 @@ export type UseMutationReturnType<
  * the mutation up elsewhere via its `mutationKey` (e.g. with `useMutationState`).
  * @param options - The {@link UseMutationOptions} to use — everything you can pass to `useMutation`.
  * @param queryClient - Use this to use a custom `QueryClient`. Otherwise, the one provided by `VueQueryPlugin`
- * will be used.
+ * will be used. Pass a `ref` or getter to switch clients while the component stays mounted.
  * @returns `mutate`/`mutateAsync` also accept per-call `onSuccess`/`onError`/`onSettled` callbacks as a second
  * argument, useful for triggering call-site side effects (e.g. navigation) without coupling them to the shared
  * mutation definition. Hook-level callbacks (passed to `options`) fire for every mutation; per-call
@@ -235,7 +235,7 @@ export function useMutation<
   TOnMutateResult = unknown,
 >(
   options: UseMutationOptions<TData, TError, TVariables, TOnMutateResult>,
-  queryClient?: QueryClient,
+  queryClient?: MaybeRefOrGetter<QueryClient>,
 ): UseMutationReturnType<TData, TError, TVariables, TOnMutateResult> {
   if (process.env.NODE_ENV === 'development') {
     if (!getCurrentScope()) {
@@ -245,32 +245,61 @@ export function useMutation<
     }
   }
 
-  const client = queryClient || useQueryClient()
+  const client = useQueryClientRef(queryClient)
   const defaultedOptions = computed(() => {
     const resolvedOptions = typeof options === 'function' ? options() : options
-    return client.defaultMutationOptions(cloneDeepUnref(resolvedOptions))
+    return client.value.defaultMutationOptions(cloneDeepUnref(resolvedOptions))
   })
-  const observer = new MutationObserver(client, defaultedOptions.value)
+  let observerClient = client.value
+  let observer = new MutationObserver(observerClient, defaultedOptions.value)
   const state = defaultedOptions.value.shallow
     ? shallowReactive(observer.getCurrentResult())
     : reactive(observer.getCurrentResult())
 
-  const unsubscribe = observer.subscribe((result) => {
-    updateState(state, result)
-  })
+  const subscribe = () =>
+    observer.subscribe((result) => {
+      updateState(state, result)
+    })
+
+  let unsubscribe = subscribe()
+
+  // Every read and write goes through the observer returned here, so it is always bound to the current client.
+  const getObserver = () => {
+    const currentClient = client.value
+    if (currentClient !== observerClient) {
+      unsubscribe()
+      observerClient = currentClient
+      observer = new MutationObserver(currentClient, defaultedOptions.value)
+      updateState(state, observer.getCurrentResult())
+      unsubscribe = subscribe()
+    }
+    return observer
+  }
+
+  watch(client, () => getObserver(), { flush: 'sync' })
 
   const mutate = (
     ...args: Parameters<
       MutateFunction<TData, TError, TVariables, TOnMutateResult>
     >
   ) => {
-    observer.mutate(args[0] as TVariables, args[1]).catch(() => {
-      // This is intentional
-    })
+    getObserver()
+      .mutate(args[0] as TVariables, args[1])
+      .catch(() => {
+        // This is intentional
+      })
   }
 
+  const mutateAsync = (
+    ...args: Parameters<
+      MutateFunction<TData, TError, TVariables, TOnMutateResult>
+    >
+  ) => getObserver().mutate(args[0] as TVariables, args[1])
+
+  const reset = () => getObserver().reset()
+
   watch(defaultedOptions, () => {
-    observer.setOptions(defaultedOptions.value)
+    getObserver().setOptions(defaultedOptions.value)
   })
 
   onScopeDispose(() => {
@@ -300,7 +329,7 @@ export function useMutation<
   return {
     ...resultRefs,
     mutate,
-    mutateAsync: state.mutate,
-    reset: state.reset,
+    mutateAsync,
+    reset,
   }
 }

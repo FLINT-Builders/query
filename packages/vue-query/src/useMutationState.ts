@@ -6,7 +6,8 @@ import {
   shallowRef,
   watch,
 } from 'vue-demi'
-import { useQueryClient } from './useQueryClient'
+import { noop } from '@tanstack/query-core'
+import { useQueryClientRef } from './useQueryClientRef'
 import { cloneDeepUnref } from './utils'
 import type { Ref } from 'vue-demi'
 import type {
@@ -15,7 +16,7 @@ import type {
   MutationState,
 } from '@tanstack/query-core'
 import type { QueryClient } from './queryClient'
-import type { MaybeRefDeep } from './types'
+import type { MaybeRefDeep, MaybeRefOrGetter } from './types'
 import type { MutationCache } from './mutationCache'
 
 type VueMutationFilters = MaybeRefDeep<MutationFilters>
@@ -33,7 +34,7 @@ export type UseIsMutatingFilters =
  *
  * @param filters - The {@link MutationFilters} to narrow down the matched mutations.
  * @param queryClient - Use this to use a custom `QueryClient`. Otherwise, the one provided by `VueQueryPlugin`
- * will be used.
+ * will be used. Pass a `ref` or getter to switch clients while the component stays mounted.
  * @returns A `ref` to the `number` of the mutations that your application currently has `pending`.
  *
  * @example
@@ -52,7 +53,7 @@ export type UseIsMutatingFilters =
  */
 export function useIsMutating(
   filters: UseIsMutatingFilters = {},
-  queryClient?: QueryClient,
+  queryClient?: MaybeRefOrGetter<QueryClient>,
 ): Ref<number> {
   if (process.env.NODE_ENV === 'development') {
     if (!getCurrentScope()) {
@@ -62,7 +63,7 @@ export function useIsMutating(
     }
   }
 
-  const client = queryClient || useQueryClient()
+  const client = useQueryClientRef(queryClient)
 
   const mutationState = useMutationState(
     {
@@ -127,7 +128,7 @@ function getResult<
  * @param options - The `filters` to narrow down matched mutations, and an optional `select` to transform the
  * mutation state.
  * @param queryClient - Use this to use a custom `QueryClient`. Otherwise, the one provided by `VueQueryPlugin`
- * will be used.
+ * will be used. Pass a `ref` or getter to switch clients while the component stays mounted.
  * @returns A `ref` to an Array of whatever `select` returns for each matching mutation.
  *
  * @example
@@ -201,7 +202,7 @@ export function useMutationState<
   options:
     | MutationStateOptions<TResult, TMutation>
     | (() => MutationStateOptions<TResult, TMutation>) = {},
-  queryClient?: QueryClient,
+  queryClient?: MaybeRefOrGetter<QueryClient>,
 ): Readonly<Ref<Array<TResult>>> {
   const resolvedOptions = computed(() => {
     const newOptions = typeof options === 'function' ? options() : options
@@ -210,15 +211,28 @@ export function useMutationState<
       select: newOptions.select,
     }
   })
-  const mutationCache = (queryClient || useQueryClient()).getMutationCache()
-  const state = shallowRef(getResult(mutationCache, resolvedOptions.value))
-  const unsubscribe = mutationCache.subscribe(() => {
-    state.value = getResult(mutationCache, resolvedOptions.value)
-  })
+  const client = useQueryClientRef(queryClient)
+  const state = shallowRef<Array<TResult>>([])
+  const update = () => {
+    state.value = getResult(
+      client.value.getMutationCache(),
+      resolvedOptions.value,
+    )
+  }
 
-  watch(resolvedOptions, () => {
-    state.value = getResult(mutationCache, resolvedOptions.value)
-  })
+  let unsubscribe: () => void = noop
+
+  watch(
+    client,
+    (currentClient) => {
+      unsubscribe()
+      unsubscribe = currentClient.getMutationCache().subscribe(update)
+      update()
+    },
+    { immediate: true, flush: 'sync' },
+  )
+
+  watch(resolvedOptions, update)
 
   onScopeDispose(() => {
     unsubscribe()
