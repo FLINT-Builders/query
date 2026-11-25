@@ -13,7 +13,17 @@ import {
 } from '@angular/core'
 import { render } from '@testing-library/angular'
 import { queryKey, sleep } from '@tanstack/query-test-utils'
+import { createAsyncStoragePersister } from '../../../query-async-storage-persister/src/index'
 import { withPersistQueryClient } from '../with-persist-query-client'
+import {
+  FORGED_MUTATION,
+  FORGED_PROFILE,
+  FORGED_SESSION,
+  PERSIST_STORAGE_KEY,
+  createMemoryStorage,
+  forgedValuesStillCached,
+  plantPoisonedQueryCache,
+} from '../../../query-persist-client-core/src/__tests__/poisonedPersistCache'
 import type {
   PersistedClient,
   Persister,
@@ -448,5 +458,77 @@ describe('withPersistQueryClient', () => {
     expect(onErrorMock).toHaveBeenCalledTimes(1)
     expect(onErrorMock).toHaveBeenNthCalledWith(1, error)
     onErrorMock.mockRestore()
+  })
+
+  it('does not show or republish queries hydrated before a stateless persisted entry', async () => {
+    const consoleError = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined)
+    const consoleWarn = vi
+      .spyOn(console, 'warn')
+      .mockImplementation(() => undefined)
+
+    const storage = createMemoryStorage()
+    plantPoisonedQueryCache(storage)
+    const persister = createAsyncStoragePersister({
+      storage,
+      throttleTime: 0,
+    })
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    queryClient.setQueryData(['profile'], 'real-profile')
+
+    const seen: Array<string | undefined> = []
+
+    @Component({
+      template: `<h1>{{ state.data() }}</h1>`,
+    })
+    class Page {
+      state = injectQuery(() => ({
+        queryKey: ['session'],
+        queryFn: () => sleep(10).then(() => 'fetched-session'),
+      }))
+
+      constructor() {
+        effect(() => {
+          seen.push(this.state.data())
+        })
+      }
+    }
+
+    const rendered = await render(Page, {
+      providers: [
+        provideZonelessChangeDetection(),
+        provideTanStackQuery(
+          queryClient,
+          withPersistQueryClient({ persistOptions: { persister } }),
+        ),
+      ],
+    })
+
+    await vi.advanceTimersByTimeAsync(0)
+    rendered.fixture.detectChanges()
+
+    expect(forgedValuesStillCached(queryClient)).toEqual([])
+    expect([undefined, 'real-profile']).toContain(
+      queryClient.getQueryData(['profile']),
+    )
+    expect(queryClient.getQueryData(['session'])).not.toBe(FORGED_SESSION)
+    expect(seen).not.toContain(FORGED_SESSION)
+    expect(rendered.container.textContent).not.toContain(FORGED_SESSION)
+
+    queryClient.setQueryData(['unrelated'], 'unrelated-value')
+    await vi.advanceTimersByTimeAsync(20)
+    rendered.fixture.detectChanges()
+
+    const saved = storage.getItem(PERSIST_STORAGE_KEY) ?? ''
+    expect(saved).not.toContain(FORGED_PROFILE)
+    expect(saved).not.toContain(FORGED_SESSION)
+    expect(saved).not.toContain(FORGED_MUTATION)
+    expect(rendered.container.textContent).not.toContain(FORGED_SESSION)
+
+    consoleError.mockRestore()
+    consoleWarn.mockRestore()
   })
 })
