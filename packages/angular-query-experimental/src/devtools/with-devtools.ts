@@ -136,8 +136,13 @@ export const withDevtools: WithDevtools = (
               }
 
               if (devtools) {
+                const resolvedClient = client ?? injectedClient
+                if (!resolvedClient) {
+                  destroyDevtools()
+                  return
+                }
                 // Update existing devtools config
-                client && devtools.setClient(client)
+                devtools.setClient(resolvedClient)
                 position && devtools.setPosition(position)
                 errorTypes && devtools.setErrorTypes(errorTypes)
                 buttonPosition && devtools.setButtonPosition(buttonPosition)

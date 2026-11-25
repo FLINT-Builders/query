@@ -1848,7 +1848,7 @@ const QueryDetails = () => {
   const { colors } = tokens
   const t = (light: string, dark: string) => (theme() === 'dark' ? dark : light)
 
-  const queryClient = useQueryDevtoolsContext().client
+  const devtoolsContext = useQueryDevtoolsContext()
 
   const [restoringLoading, setRestoringLoading] = createSignal(false)
   const [dataMode, setDataMode] = createSignal<'view' | 'edit'>('view')
@@ -2078,7 +2078,7 @@ const QueryDetails = () => {
                 type: 'INVALIDATE',
                 queryHash: activeQuery()?.queryHash,
               })
-              queryClient.invalidateQueries({
+              devtoolsContext.client.invalidateQueries({
                 queryKey: activeQuery()?.queryKey,
                 exact: true,
               })
@@ -2106,7 +2106,7 @@ const QueryDetails = () => {
                 type: 'RESET',
                 queryHash: activeQuery()?.queryHash,
               })
-              queryClient.resetQueries({
+              devtoolsContext.client.resetQueries({
                 queryKey: activeQuery()?.queryKey,
                 exact: true,
               })
@@ -2134,7 +2134,7 @@ const QueryDetails = () => {
                 type: 'REMOVE',
                 queryHash: activeQuery()?.queryHash,
               })
-              queryClient.removeQueries({
+              devtoolsContext.client.removeQueries({
                 queryKey: activeQuery()?.queryKey,
                 exact: true,
               })
@@ -2217,7 +2217,7 @@ const QueryDetails = () => {
                     type: 'RESTORE_ERROR',
                     queryHash: activeQuery()?.queryHash,
                   })
-                  queryClient.resetQueries({
+                  devtoolsContext.client.resetQueries({
                     queryKey: activeQuery()?.queryKey,
                   })
                 }

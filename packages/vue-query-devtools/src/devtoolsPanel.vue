@@ -1,7 +1,20 @@
 <script setup lang="ts">
-import { computed, onMounted, onScopeDispose, ref, watchEffect } from 'vue'
-import { onlineManager, useQueryClient } from '@tanstack/vue-query'
+import {
+  computed,
+  inject,
+  onMounted,
+  onScopeDispose,
+  ref,
+  watch,
+  watchEffect,
+} from 'vue'
+import {
+  VUE_QUERY_CLIENT,
+  onlineManager,
+  useQueryClient,
+} from '@tanstack/vue-query'
 import { TanstackQueryDevtoolsPanel } from '@tanstack/query-devtools'
+import type { QueryClient } from '@tanstack/vue-query'
 import type { DevtoolsPanelOptions } from './types'
 
 const props = defineProps<DevtoolsPanelOptions>()
@@ -13,9 +26,12 @@ const style = computed<any>(() => {
 })
 
 const div = ref<HTMLElement>()
-const client = props.client || useQueryClient()
+const injectedClient = props.client
+  ? inject<QueryClient | undefined>(VUE_QUERY_CLIENT, undefined)
+  : useQueryClient()
+const client = computed(() => props.client || injectedClient)
 const devtools = new TanstackQueryDevtoolsPanel({
-  client,
+  client: client.value!,
   queryFlavor: 'Vue Query',
   version: '5',
   onlineManager,
@@ -29,6 +45,28 @@ const devtools = new TanstackQueryDevtoolsPanel({
   onClose: props.onClose,
   theme: props.theme,
 })
+let isMounted = false
+
+// The panel must never keep rendering a client the app has replaced, so it
+// unmounts while no client is available.
+watch(
+  client,
+  (current) => {
+    if (!current) {
+      if (isMounted) {
+        devtools.unmount()
+        isMounted = false
+      }
+      return
+    }
+    devtools.setClient(current)
+    if (!isMounted && div.value) {
+      devtools.mount(div.value)
+      isMounted = true
+    }
+  },
+  { flush: 'sync' },
+)
 
 watchEffect(() => {
   devtools.setOnClose(props.onClose ?? (() => {}))
@@ -37,9 +75,15 @@ watchEffect(() => {
 })
 
 onMounted(() => {
-  devtools.mount(div.value as HTMLElement)
+  if (client.value && !isMounted) {
+    devtools.mount(div.value as HTMLElement)
+    isMounted = true
+  }
   onScopeDispose(() => {
-    devtools.unmount()
+    if (isMounted) {
+      devtools.unmount()
+      isMounted = false
+    }
   })
 })
 </script>
