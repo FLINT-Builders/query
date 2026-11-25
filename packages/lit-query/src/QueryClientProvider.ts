@@ -71,6 +71,9 @@ export class QueryClientProvider extends LitElement {
    * The `QueryClient` provided to descendant controllers and global fallback
    * helpers while this provider is connected.
    *
+   * During server rendering the provider is not attached to a document, so the
+   * client is not registered for the global fallback helpers.
+   *
    * Bind this as a property in Lit templates with `.client=${queryClient}`.
    */
   declare client: QueryClient
@@ -78,6 +81,8 @@ export class QueryClientProvider extends LitElement {
   private readonly contextProvider: ContextProvider<typeof queryClientContext>
 
   private mountedClient: QueryClient | undefined
+
+  private registeredClient: QueryClient | undefined
 
   constructor() {
     super()
@@ -147,7 +152,14 @@ export class QueryClientProvider extends LitElement {
     }
 
     client.mount()
-    registerDefaultQueryClient(client)
+    // The default client registry is process-wide. Server renderers such as
+    // Lit SSR call `connectedCallback` on elements that are not attached to a
+    // document, and one process serves many requests, so only a provider in a
+    // live document may register its client there.
+    if (this.isConnected) {
+      registerDefaultQueryClient(client)
+      this.registeredClient = client
+    }
     this.mountedClient = client
   }
 
@@ -157,7 +169,10 @@ export class QueryClientProvider extends LitElement {
     }
 
     client.unmount()
-    unregisterDefaultQueryClient(client)
+    if (this.registeredClient === client) {
+      unregisterDefaultQueryClient(client)
+      this.registeredClient = undefined
+    }
 
     if (this.mountedClient === client) {
       this.mountedClient = undefined

@@ -17,6 +17,8 @@ Server rendering has three phases:
 
 Never share one server `QueryClient` between users or requests.
 
+`QueryClientProvider` does not register its client for the global helpers (`useQueryClient`, `resolveQueryClient`, and `getDefaultQueryClient`) during server rendering, because that registry is shared by every request in the process. Pass the per-request client explicitly instead.
+
 ## Server Prefetch and Render
 
 ```ts

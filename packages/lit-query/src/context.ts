@@ -24,8 +24,13 @@ let defaultClient: QueryClient | undefined
  * Registers a `QueryClient` as a process-local fallback for APIs that resolve a
  * client without an explicit argument.
  *
- * `QueryClientProvider` calls this automatically while it is connected. Prefer
- * passing an explicit client or rendering under a provider when possible.
+ * `QueryClientProvider` calls this automatically while it is connected to a
+ * document. Prefer passing an explicit client or rendering under a provider
+ * when possible.
+ *
+ * The registration is shared by everything running in the same JavaScript
+ * realm. Do not call this during server rendering, where one process renders
+ * many requests.
  *
  * @param client - The query client to register as the current default.
  */

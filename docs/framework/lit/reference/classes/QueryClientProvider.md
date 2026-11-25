@@ -68,7 +68,7 @@ const view = html`
 new QueryClientProvider(): QueryClientProvider;
 ```
 
-Defined in: [packages/lit-query/src/QueryClientProvider.ts:82](https://github.com/TanStack/query/blob/main/packages/lit-query/src/QueryClientProvider.ts#L82)
+Defined in: [packages/lit-query/src/QueryClientProvider.ts:87](https://github.com/TanStack/query/blob/main/packages/lit-query/src/QueryClientProvider.ts#L87)
 
 #### Returns
 
@@ -88,9 +88,12 @@ LitElement.constructor
 client: QueryClient;
 ```
 
-Defined in: [packages/lit-query/src/QueryClientProvider.ts:76](https://github.com/TanStack/query/blob/main/packages/lit-query/src/QueryClientProvider.ts#L76)
+Defined in: [packages/lit-query/src/QueryClientProvider.ts:79](https://github.com/TanStack/query/blob/main/packages/lit-query/src/QueryClientProvider.ts#L79)
 
 The `QueryClient` provided to descendant controllers and global fallback
 helpers while this provider is connected.
+
+During server rendering the provider is not attached to a document, so the
+client is not registered for the global fallback helpers.
 
 Bind this as a property in Lit templates with `.client=${queryClient}`.
