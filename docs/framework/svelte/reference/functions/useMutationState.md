@@ -4,10 +4,14 @@ title: useMutationState
 ---
 
 ```ts
-function useMutationState<TResult, TMutation>(options: MutationStateOptions<TResult, TMutation>, queryClient?: QueryClient): TResult[];
+function useMutationState<TResult, TMutation>(options: 
+  | MutationStateOptions<TResult, TMutation>
+  | Accessor<MutationStateOptions<TResult, TMutation>>, queryClient?: 
+  | QueryClient
+  | Accessor<QueryClient>): TResult[];
 ```
 
-Defined in: [packages/svelte-query/src/useMutationState.svelte.ts:99](https://github.com/TanStack/query/blob/main/packages/svelte-query/src/useMutationState.svelte.ts#L99)
+Defined in: [packages/svelte-query/src/useMutationState.svelte.ts:104](https://github.com/TanStack/query/blob/main/packages/svelte-query/src/useMutationState.svelte.ts#L104)
 
 `useMutationState` gives you access to all mutations (matching the given `filters`), including ones that
 were created by a different component or hook instance, or even ones no longer mounted.
@@ -26,17 +30,17 @@ were created by a different component or hook instance, or even ones no longer m
 
 ### options
 
-[`MutationStateOptions`](../type-aliases/MutationStateOptions.md)\<`TResult`, `TMutation`\> = `{}`
-
 The `filters` to narrow down matched mutations, and an optional `select` to transform the
-mutation state.
+mutation state. Pass a function returning them to re-filter when they change.
+
+[`MutationStateOptions`](../type-aliases/MutationStateOptions.md)\<`TResult`, `TMutation`\> | [`Accessor`](../type-aliases/Accessor.md)\<[`MutationStateOptions`](../type-aliases/MutationStateOptions.md)\<`TResult`, `TMutation`\>\>
 
 ### queryClient?
 
-[`QueryClient`](../classes/QueryClient.md)
+Use this to use a custom `QueryClient`, or pass a function returning it to follow a
+client that changes. Otherwise, the one from the nearest context will be used.
 
-Use this to use a custom `QueryClient`. Otherwise, the one from the nearest context will
-be used.
+[`QueryClient`](../classes/QueryClient.md) | [`Accessor`](../type-aliases/Accessor.md)\<[`QueryClient`](../classes/QueryClient.md)\>
 
 ## Returns
 
