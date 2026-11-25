@@ -2,12 +2,15 @@ import {
   For,
   Show,
   batch,
+  createContext,
   createEffect,
   createMemo,
+  createRenderEffect,
   createSignal,
   on,
   onCleanup,
   onMount,
+  useContext,
 } from 'solid-js'
 import { rankItem } from '@tanstack/match-sorter-utils'
 import * as goober from 'goober'
@@ -672,8 +675,19 @@ const DraggablePanel: Component<DevtoolsPanelProps> = (props) => {
 }
 
 export const ContentView: Component<ContentViewProps> = (props) => {
-  setupQueryCacheSubscription()
-  setupMutationCacheSubscription()
+  const listeners = {
+    queries: setupQueryCacheSubscription(),
+    mutations: setupMutationCacheSubscription(),
+  }
+
+  return (
+    <CacheListenersContext.Provider value={listeners}>
+      <ContentViewPanel {...props} />
+    </CacheListenersContext.Provider>
+  )
+}
+
+const ContentViewPanel: Component<ContentViewProps> = (props) => {
   let containerRef!: HTMLDivElement
   const theme = useTheme()
   const css = useQueryDevtoolsContext().shadowDOMTarget
@@ -2569,35 +2583,60 @@ const MutationDetails = () => {
   )
 }
 
-const queryCacheMap = new Map<
-  (q: Accessor<QueryCache>) => any,
-  {
-    setter: Setter<any>
-    shouldUpdate: (event: QueryCacheNotifyEvent) => boolean
+interface QueryCacheListener {
+  callback: (queryCache: Accessor<QueryCache>) => any
+  setter: Setter<any>
+  shouldUpdate: (event: QueryCacheNotifyEvent) => boolean
+}
+
+interface MutationCacheListener {
+  callback: (mutationCache: Accessor<MutationCache>) => any
+  setter: Setter<any>
+}
+
+// Each ContentView owns its listeners so that several devtools panels on one
+// page never feed one client's cache into another panel.
+const CacheListenersContext = createContext<{
+  queries: Set<QueryCacheListener>
+  mutations: Set<MutationCacheListener>
+}>()
+
+const useCacheListeners = () => {
+  const listeners = useContext(CacheListenersContext)
+  if (!listeners) {
+    throw new Error(
+      'Query devtools cache subscriptions must be used inside a ContentView',
+    )
   }
->()
+  return listeners
+}
 
 const setupQueryCacheSubscription = () => {
+  const listeners = new Set<QueryCacheListener>()
   const queryCache = createMemo(() => {
     const client = useQueryDevtoolsContext().client
     return client.getQueryCache()
   })
 
-  const unsubscribe = queryCache().subscribe((q) => {
-    batch(() => {
-      for (const [callback, value] of queryCacheMap.entries()) {
-        if (!value.shouldUpdate(q)) continue
-        value.setter(callback(queryCache))
-      }
+  createRenderEffect(() => {
+    const cache = queryCache()
+    const emittingCache = () => cache
+    const unsubscribe = cache.subscribe((event) => {
+      batch(() => {
+        for (const listener of listeners) {
+          if (!listener.shouldUpdate(event)) continue
+          listener.setter(listener.callback(emittingCache))
+        }
+      })
     })
+    onCleanup(unsubscribe)
   })
 
   onCleanup(() => {
-    queryCacheMap.clear()
-    unsubscribe()
+    listeners.clear()
   })
 
-  return unsubscribe
+  return listeners
 }
 
 const createSubscribeToQueryCacheBatcher = <T,>(
@@ -2605,6 +2644,7 @@ const createSubscribeToQueryCacheBatcher = <T,>(
   equalityCheck: boolean = true,
   shouldUpdate: (event: QueryCacheNotifyEvent) => boolean = () => true,
 ) => {
+  const listeners = useCacheListeners().queries
   const queryCache = createMemo(() => {
     const client = useQueryDevtoolsContext().client
     return client.getQueryCache()
@@ -2619,49 +2659,59 @@ const createSubscribeToQueryCacheBatcher = <T,>(
     setValue(callback(queryCache))
   })
 
-  queryCacheMap.set(callback, {
+  const listener: QueryCacheListener = {
+    callback,
     setter: setValue,
-    shouldUpdate: shouldUpdate,
-  })
+    shouldUpdate,
+  }
+  listeners.add(listener)
 
   onCleanup(() => {
-    queryCacheMap.delete(callback)
+    listeners.delete(listener)
   })
 
   return value
 }
 
-const mutationCacheMap = new Map<
-  (q: Accessor<MutationCache>) => any,
-  Setter<any>
->()
-
 const setupMutationCacheSubscription = () => {
+  const listeners = new Set<MutationCacheListener>()
   const mutationCache = createMemo(() => {
     const client = useQueryDevtoolsContext().client
     return client.getMutationCache()
   })
 
-  const unsubscribe = mutationCache().subscribe(() => {
-    for (const [callback, setter] of mutationCacheMap.entries()) {
-      queueMicrotask(() => {
-        setter(callback(mutationCache))
-      })
-    }
+  createRenderEffect(() => {
+    const cache = mutationCache()
+    const emittingCache = () => cache
+    let subscribed = true
+    const unsubscribe = cache.subscribe(() => {
+      for (const listener of listeners) {
+        queueMicrotask(() => {
+          // An update queued before the panel switched clients or unmounted
+          // must not overwrite the panel with this cache's mutations.
+          if (!subscribed || !listeners.has(listener)) return
+          listener.setter(listener.callback(emittingCache))
+        })
+      }
+    })
+    onCleanup(() => {
+      subscribed = false
+      unsubscribe()
+    })
   })
 
   onCleanup(() => {
-    mutationCacheMap.clear()
-    unsubscribe()
+    listeners.clear()
   })
 
-  return unsubscribe
+  return listeners
 }
 
 const createSubscribeToMutationCacheBatcher = <T,>(
   callback: (queryCache: Accessor<MutationCache>) => Exclude<T, Function>,
   equalityCheck: boolean = true,
 ) => {
+  const listeners = useCacheListeners().mutations
   const mutationCache = createMemo(() => {
     const client = useQueryDevtoolsContext().client
     return client.getMutationCache()
@@ -2676,10 +2726,11 @@ const createSubscribeToMutationCacheBatcher = <T,>(
     setValue(callback(mutationCache))
   })
 
-  mutationCacheMap.set(callback, setValue)
+  const listener: MutationCacheListener = { callback, setter: setValue }
+  listeners.add(listener)
 
   onCleanup(() => {
-    mutationCacheMap.delete(callback)
+    listeners.delete(listener)
   })
 
   return value
