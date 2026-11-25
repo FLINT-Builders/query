@@ -7,7 +7,12 @@ import {
   shouldThrowError,
 } from '@tanstack/query-core'
 import { useQueryClient } from './QueryClientProvider'
+import {
+  useClientObserver,
+  useIsomorphicLayoutEffect,
+} from './useClientObserver'
 import type {
+  UseMutateAsyncFunction,
   UseMutateFunction,
   UseMutationOptions,
   UseMutationResult,
@@ -199,13 +204,21 @@ export function useMutation<
 ): UseMutationResult<TData, TError, TVariables, TOnMutateResult> {
   const client = useQueryClient(queryClient)
 
-  const [observer] = React.useState(
+  const observer = useClientObserver(
+    client,
     () =>
       new MutationObserver<TData, TError, TVariables, TOnMutateResult>(
         client,
         options,
       ),
   )
+
+  // `mutate` and `mutateAsync` may be called through references kept from an
+  // earlier render, so they always go through the committed observer.
+  const committedObserver = React.useRef(observer)
+  useIsomorphicLayoutEffect(() => {
+    committedObserver.current = observer
+  }, [observer])
 
   React.useEffect(() => {
     observer.setOptions(options)
@@ -221,6 +234,17 @@ export function useMutation<
     () => observer.getCurrentResult(),
   )
 
+  const mutateAsync = React.useCallback<
+    UseMutateAsyncFunction<TData, TError, TVariables, TOnMutateResult>
+  >(
+    (
+      ...args: Parameters<
+        UseMutateAsyncFunction<TData, TError, TVariables, TOnMutateResult>
+      >
+    ) => committedObserver.current.mutate(args[0] as TVariables, args[1]),
+    [],
+  )
+
   const mutate = React.useCallback<
     UseMutateFunction<TData, TError, TVariables, TOnMutateResult>
   >(
@@ -229,9 +253,9 @@ export function useMutation<
         UseMutateFunction<TData, TError, TVariables, TOnMutateResult>
       >
     ) => {
-      observer.mutate(args[0] as TVariables, args[1]).catch(noop)
+      mutateAsync(...args).catch(noop)
     },
-    [observer],
+    [mutateAsync],
   )
 
   if (
@@ -241,5 +265,5 @@ export function useMutation<
     throw result.error
   }
 
-  return { ...result, mutate, mutateAsync: result.mutate }
+  return { ...result, mutate, mutateAsync }
 }
