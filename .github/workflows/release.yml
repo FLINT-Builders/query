@@ -2,14 +2,11 @@ name: Release
 
 on:
   push:
-    branches: [main, 'v[0-9]', '*-pre', '*-maint']
+    branches: [main]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
-
-env:
-  NX_CLOUD_ACCESS_TOKEN: ${{ secrets.NX_CLOUD_ACCESS_TOKEN }}
 
 permissions:
   contents: read
@@ -17,7 +14,7 @@ permissions:
 jobs:
   release:
     name: Release
-    if: github.repository_owner == 'TanStack'
+    if: github.repository_owner == 'TanStack' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -33,34 +30,19 @@ jobs:
         uses: TanStack/config/.github/setup@e4b48f16568324f76f467aa4c2aac2f05db632c3
       - name: Run Build
         run: pnpm run build:all
-      - name: Determine dist-tag
-        id: dist-tag
-        run: |
-          BRANCH="${GITHUB_REF_NAME}"
-          if [[ "$BRANCH" == *-pre ]]; then
-            echo "prerelease=true" >> "$GITHUB_OUTPUT"
-          elif [[ "$BRANCH" == *-maint ]]; then
-            echo "tag=maint" >> "$GITHUB_OUTPUT"
-          elif [[ "$BRANCH" =~ ^v[0-9]+$ ]]; then
-            echo "tag=$BRANCH" >> "$GITHUB_OUTPUT"
-          else
-            echo "latest=true" >> "$GITHUB_OUTPUT"
-          fi
       - name: Create Release Pull Request or Publish
         id: changesets
         uses: changesets/action@63a615b9cd06ba9a3e6d13796c7fbcb080a60a0b # v1.8.0
         with:
           version: pnpm run changeset:version
-          publish: pnpm run changeset:publish ${{ steps.dist-tag.outputs.tag && format('--tag {0}', steps.dist-tag.outputs.tag) }}
+          publish: pnpm run changeset:publish
           title: 'ci: Version Packages'
           commit: 'ci: changeset release'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Create GitHub Release
         if: steps.changesets.outputs.published == 'true'
-        run: node scripts/create-github-release.mjs ${PRERELEASE_FLAG} ${LATEST_FLAG}
+        run: node scripts/create-github-release.mjs --latest
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PRERELEASE_FLAG: ${{ steps.dist-tag.outputs.prerelease == 'true' && '--prerelease' }}
-          LATEST_FLAG: ${{ steps.dist-tag.outputs.latest == 'true' && '--latest' }}
