@@ -310,7 +310,7 @@ describe('mutationObserver', () => {
     unsubscribe()
   })
 
-  it('changing mutation meta should affect pending mutations', async () => {
+  it('changing mutation meta should not affect pending mutations', async () => {
     const mutationObserver = new MutationObserver(queryClient, {
       meta: { a: 1 },
       mutationFn: (text: string) => sleep(20).then(() => text),
@@ -334,7 +334,7 @@ describe('mutationObserver', () => {
     })
 
     expect(queryClient.getMutationCache().find({})).toMatchObject({
-      options: { meta: { a: 2 } },
+      options: { meta: { a: 1 } },
       state: {
         status: 'pending',
       },

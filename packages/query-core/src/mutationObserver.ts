@@ -80,10 +80,13 @@ export class MutationObserver<
   /**
    * Updates the observer's options.
    *
+   * The new options only apply to mutations built by later `mutate()` calls.
+   * A mutation that was already started keeps the `mutationFn`, callbacks and
+   * other options it was built with, including for retries and resumes.
+   *
    * If the new `mutationKey` differs from the previous one (and both were
    * defined), the observer is reset, detaching it from the mutation it was
-   * observing. Otherwise, if the currently observed mutation is still
-   * `pending`, its options are updated in place as well.
+   * observing.
    *
    * @example
    * ```ts
@@ -119,8 +122,6 @@ export class MutationObserver<
       hashKey(prevOptions.mutationKey) !== hashKey(this.options.mutationKey)
     ) {
       this.reset()
-    } else if (this.#currentMutation?.state.status === 'pending') {
-      this.#currentMutation.setOptions(this.options)
     }
   }
 
@@ -243,11 +244,12 @@ export class MutationObserver<
       if (this.#mutateOptions && this.hasListeners()) {
         const variables = this.#currentResult.variables!
         const onMutateResult = this.#currentResult.context
+        const mutationOptions = this.#currentMutation?.options ?? this.options
 
         const context = {
           client: this.#client,
-          meta: this.options.meta,
-          mutationKey: this.options.mutationKey,
+          meta: mutationOptions.meta,
+          mutationKey: mutationOptions.mutationKey,
         } satisfies MutationFunctionContext
 
         if (action?.type === 'success') {
