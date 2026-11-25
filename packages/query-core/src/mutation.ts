@@ -148,6 +148,7 @@ export class Mutation<
   >
   #mutationCache: MutationCache
   #retryer?: Retryer<TData>
+  #isRemoved = false
 
   constructor(
     config: MutationConfig<TData, TError, TVariables, TOnMutateResult>,
@@ -171,6 +172,19 @@ export class Mutation<
     this.options = options
 
     this.updateGcTime(this.options.gcTime)
+  }
+
+  /**
+   * Marks this mutation as removed from its `MutationCache`. An in-flight
+   * `execute` still settles with the mutation function's outcome, but no
+   * further `onMutate`, `onSuccess`, `onError` or `onSettled` callbacks (cache,
+   * options or per-call) run, so a cleared cache cannot be written back to.
+   *
+   * @internal
+   */
+  destroy(): void {
+    super.destroy()
+    this.#isRemoved = true
   }
 
   /**
@@ -272,6 +286,10 @@ export class Mutation<
    * cannot mask the original error; an `error` action is then dispatched and
    * the original error is re-thrown.
    *
+   * Once the mutation is removed from its cache (e.g. by `MutationCache.clear`
+   * or `QueryClient.clear`), no further callbacks run; the returned promise
+   * still resolves or rejects with the mutation function's outcome.
+   *
    * @example
    * ```ts
    * // Called internally by `MutationObserver.mutate` and `Mutation.continue` —
@@ -323,111 +341,129 @@ export class Mutation<
       } else {
         this.#dispatch({ type: 'pending', variables, isPaused })
         // Notify cache callback
-        if (this.#mutationCache.config.onMutate) {
+        if (this.#mutationCache.config.onMutate && !this.#isRemoved) {
           await this.#mutationCache.config.onMutate(
             variables,
             this as Mutation<unknown, unknown, unknown, unknown>,
             mutationFnContext,
           )
         }
-        const context = await this.options.onMutate?.(
-          variables,
-          mutationFnContext,
-        )
-        if (context !== this.state.context) {
-          this.#dispatch({
-            type: 'pending',
-            context,
+        if (!this.#isRemoved) {
+          const context = await this.options.onMutate?.(
             variables,
-            isPaused,
-          })
+            mutationFnContext,
+          )
+          if (context !== this.state.context) {
+            this.#dispatch({
+              type: 'pending',
+              context,
+              variables,
+              isPaused,
+            })
+          }
         }
       }
       const data = await retryer.start()
 
       // Notify cache callback
-      await this.#mutationCache.config.onSuccess?.(
-        data,
-        variables,
-        this.state.context,
-        this as Mutation<unknown, unknown, unknown, unknown>,
-        mutationFnContext,
-      )
+      if (!this.#isRemoved) {
+        await this.#mutationCache.config.onSuccess?.(
+          data,
+          variables,
+          this.state.context,
+          this as Mutation<unknown, unknown, unknown, unknown>,
+          mutationFnContext,
+        )
+      }
 
-      await this.options.onSuccess?.(
-        data,
-        variables,
-        this.state.context!,
-        mutationFnContext,
-      )
+      if (!this.#isRemoved) {
+        await this.options.onSuccess?.(
+          data,
+          variables,
+          this.state.context!,
+          mutationFnContext,
+        )
+      }
 
       // Notify cache callback
-      await this.#mutationCache.config.onSettled?.(
-        data,
-        null,
-        this.state.variables,
-        this.state.context,
-        this as Mutation<unknown, unknown, unknown, unknown>,
-        mutationFnContext,
-      )
+      if (!this.#isRemoved) {
+        await this.#mutationCache.config.onSettled?.(
+          data,
+          null,
+          this.state.variables,
+          this.state.context,
+          this as Mutation<unknown, unknown, unknown, unknown>,
+          mutationFnContext,
+        )
+      }
 
-      await this.options.onSettled?.(
-        data,
-        null,
-        variables,
-        this.state.context,
-        mutationFnContext,
-      )
+      if (!this.#isRemoved) {
+        await this.options.onSettled?.(
+          data,
+          null,
+          variables,
+          this.state.context,
+          mutationFnContext,
+        )
+      }
 
       this.#dispatch({ type: 'success', data })
       return data
     } catch (error) {
       try {
         // Notify cache callback
-        await this.#mutationCache.config.onError?.(
-          error as any,
-          variables,
-          this.state.context,
-          this as Mutation<unknown, unknown, unknown, unknown>,
-          mutationFnContext,
-        )
+        if (!this.#isRemoved) {
+          await this.#mutationCache.config.onError?.(
+            error as any,
+            variables,
+            this.state.context,
+            this as Mutation<unknown, unknown, unknown, unknown>,
+            mutationFnContext,
+          )
+        }
       } catch (e) {
         void Promise.reject(e)
       }
 
       try {
-        await this.options.onError?.(
-          error as TError,
-          variables,
-          this.state.context,
-          mutationFnContext,
-        )
+        if (!this.#isRemoved) {
+          await this.options.onError?.(
+            error as TError,
+            variables,
+            this.state.context,
+            mutationFnContext,
+          )
+        }
       } catch (e) {
         void Promise.reject(e)
       }
 
       try {
         // Notify cache callback
-        await this.#mutationCache.config.onSettled?.(
-          undefined,
-          error as any,
-          this.state.variables,
-          this.state.context,
-          this as Mutation<unknown, unknown, unknown, unknown>,
-          mutationFnContext,
-        )
+        if (!this.#isRemoved) {
+          await this.#mutationCache.config.onSettled?.(
+            undefined,
+            error as any,
+            this.state.variables,
+            this.state.context,
+            this as Mutation<unknown, unknown, unknown, unknown>,
+            mutationFnContext,
+          )
+        }
       } catch (e) {
         void Promise.reject(e)
       }
 
       try {
-        await this.options.onSettled?.(
-          undefined,
-          error as TError,
-          variables,
-          this.state.context,
-          mutationFnContext,
-        )
+        if (!this.#isRemoved) {
+          await this.options.onSettled?.(
+            undefined,
+            error as TError,
+            variables,
+            this.state.context,
+            mutationFnContext,
+          )
+        }
       } catch (e) {
         void Promise.reject(e)
       }
@@ -504,7 +540,7 @@ export class Mutation<
 
     notifyManager.batch(() => {
       this.#observers.forEach((observer) => {
-        observer.onMutationUpdate(action)
+        observer.onMutationUpdate(action, this.#isRemoved)
       })
       this.#mutationCache.notify({
         mutation: this,
