@@ -440,22 +440,44 @@ export function injectQueries<
 
     const resultFromSubscriberSignal = signal<TCombinedResult | null>(null)
 
+    let unsubscribeCurrent: (() => void) | undefined
+    destroyRef.onDestroy(() => unsubscribeCurrent?.())
+
     effect(() => {
       const observer = observerSignal()
       const [_optimisticResult, getCombinedResult] = optimisticResultSignal()
 
       untracked(() => {
+        let active = true
+
         const unsubscribe = isRestoring()
           ? () => undefined
           : ngZone.runOutsideAngular(() =>
               observer.subscribe(
                 notifyManager.batchCalls((state) => {
+                  // Notifications are scheduled, so one can still arrive after
+                  // this listener has been replaced or removed.
+                  if (!active) return
                   resultFromSubscriberSignal.set(getCombinedResult(state))
                 }),
               ),
             )
 
-        destroyRef.onDestroy(unsubscribe)
+        // Unsubscribe the previous listener only after subscribing the new one,
+        // so the observer keeps a listener and does not tear down and refetch
+        // its queries.
+        const unsubscribePrevious = unsubscribeCurrent
+        unsubscribeCurrent = () => {
+          active = false
+          unsubscribe()
+        }
+
+        if (unsubscribePrevious) {
+          unsubscribePrevious()
+          // The subscriber result was combined for the previous query list, and
+          // the current list may not notify again if its data is already cached.
+          resultFromSubscriberSignal.set(getCombinedResult())
+        }
       })
     })
 
