@@ -63,6 +63,15 @@ type MutationStateOptions<
   select?: (mutation: TMutation) => TResult
 }
 
+type MutationStateSnapshot<
+  TResult,
+  TMutation extends Mutation<any, any, any, any>,
+> = {
+  mutationCache: MutationCache
+  options: MutationStateOptions<TResult, TMutation>
+  result: Array<TResult>
+}
+
 function getResult<
   TResult = MutationState,
   TMutation extends Mutation<any, any, any, any> =
@@ -164,31 +173,52 @@ export function useMutationState<
 ): Array<TResult> {
   const mutationCache = useQueryClient(queryClient).getMutationCache()
   const optionsRef = React.useRef(options)
-  const result = React.useRef<Array<TResult>>(null)
-  if (result.current === null) {
-    result.current = getResult(mutationCache, options)
-  }
+  const snapshot = React.useRef<MutationStateSnapshot<
+    TResult,
+    TMutation
+  > | null>(null)
 
   React.useEffect(() => {
     optionsRef.current = options
   })
 
+  // A snapshot is only returned for the cache and options it was computed
+  // from, so a new client or new filters never see the previous result.
+  const getSnapshot = (): Array<TResult> => {
+    const previous = snapshot.current
+    if (
+      previous?.mutationCache === mutationCache &&
+      previous.options === options
+    ) {
+      return previous.result
+    }
+
+    const result = replaceEqualDeep(
+      previous?.result,
+      getResult(mutationCache, options),
+    )
+    snapshot.current = { mutationCache, options, result }
+    return result
+  }
+
   return React.useSyncExternalStore(
     React.useCallback(
       (onStoreChange) =>
         mutationCache.subscribe(() => {
-          const nextResult = replaceEqualDeep(
-            result.current,
-            getResult(mutationCache, optionsRef.current),
+          const previous = snapshot.current
+          const nextOptions = optionsRef.current
+          const result = replaceEqualDeep(
+            previous?.result,
+            getResult(mutationCache, nextOptions),
           )
-          if (result.current !== nextResult) {
-            result.current = nextResult
+          if (previous?.result !== result) {
+            snapshot.current = { mutationCache, options: nextOptions, result }
             notifyManager.schedule(onStoreChange)
           }
         }),
       [mutationCache],
     ),
-    () => result.current,
-    () => result.current,
-  )!
+    getSnapshot,
+    getSnapshot,
+  )
 }
