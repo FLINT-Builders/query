@@ -1,4 +1,5 @@
 import {
+  CancelledError,
   hashKey,
   matchQuery,
   notifyManager,
@@ -78,6 +79,14 @@ export interface StoragePersisterOptions<TStorageValue = string> {
 
 export const PERSISTER_KEY_PREFIX = 'tanstack-query'
 
+function hasSameData(a: QueryState | undefined, b: QueryState | undefined) {
+  return (
+    a?.data === b?.data &&
+    a?.dataUpdatedAt === b?.dataUpdatedAt &&
+    a?.dataUpdateCount === b?.dataUpdateCount
+  )
+}
+
 /**
  * Warning: experimental feature.
  * This utility function enables fine-grained query persistence.
@@ -127,6 +136,21 @@ export function experimental_createQueryPersister<TStorageValue = string>({
     queryHash: string,
     afterRestoreMacroTask?: (persistedQuery: PersistedQuery) => void,
   ) {
+    const persistedQuery = await retrievePersistedQuery(queryHash)
+
+    if (persistedQuery) {
+      if (afterRestoreMacroTask) {
+        notifyManager.schedule(() => afterRestoreMacroTask(persistedQuery))
+      }
+      return persistedQuery.state.data as T
+    }
+
+    return
+  }
+
+  async function retrievePersistedQuery(
+    queryHash: string,
+  ): Promise<PersistedQuery | undefined> {
     if (storage != null) {
       const storageKey = `${prefix}-${queryHash}`
       try {
@@ -143,14 +167,7 @@ export function experimental_createQueryPersister<TStorageValue = string>({
           if (isExpiredOrBusted(persistedQuery)) {
             await storage.removeItem(storageKey)
           } else {
-            if (afterRestoreMacroTask) {
-              // Just after restoring we want to get fresh data from the server if it's stale
-              notifyManager.schedule(() =>
-                afterRestoreMacroTask(persistedQuery),
-              )
-            }
-            // We must resolve the promise here, as otherwise we will have `loading` state in the app until `queryFn` resolves
-            return persistedQuery.state.data as T
+            return persistedQuery
           }
         }
       } catch (err) {
@@ -201,6 +218,33 @@ export function experimental_createQueryPersister<TStorageValue = string>({
     }
   }
 
+  function scheduleAfterRestore(
+    query: Query,
+    persistedQuery: PersistedQuery,
+    restoredState: QueryState,
+  ) {
+    notifyManager.schedule(() => {
+      // A newer write has replaced the restored data, so the persisted timestamps no longer apply
+      if (!hasSameData(query.state, restoredState)) {
+        return
+      }
+
+      // Set proper updatedAt, since resolving in the first pass overrides those values
+      query.setState({
+        dataUpdatedAt: persistedQuery.state.dataUpdatedAt,
+        errorUpdatedAt: persistedQuery.state.errorUpdatedAt,
+      })
+
+      // Just after restoring we want to get fresh data from the server if it's stale
+      if (
+        refetchOnRestore === 'always' ||
+        (refetchOnRestore === true && query.isStale())
+      ) {
+        query.fetch()
+      }
+    })
+  }
+
   async function persisterFn<T, TQueryKey extends QueryKey>(
     queryFn: (context: QueryFunctionContext<TQueryKey>) => T | Promise<T>,
     ctx: QueryFunctionContext<TQueryKey>,
@@ -210,26 +254,37 @@ export function experimental_createQueryPersister<TStorageValue = string>({
 
     // Try to restore only if we do not have any data in the cache and we have persister defined
     if (matchesFilter && query.state.data === undefined && storage != null) {
-      const restoredData = await retrieveQuery(
-        query.queryHash,
-        (persistedQuery: PersistedQuery) => {
-          // Set proper updatedAt, since resolving in the first pass overrides those values
-          query.setState({
-            dataUpdatedAt: persistedQuery.state.dataUpdatedAt,
-            errorUpdatedAt: persistedQuery.state.errorUpdatedAt,
-          })
+      const stateBeforeRestore = query.state
+      const calledFromFetch = stateBeforeRestore.fetchStatus !== 'idle'
+      const persistedQuery = await retrievePersistedQuery(query.queryHash)
+      const stateAfterRead: QueryState = query.state
 
-          if (
-            refetchOnRestore === 'always' ||
-            (refetchOnRestore === true && query.isStale())
-          ) {
-            query.fetch()
+      // Anything written to the query while storage was being read is newer than the persisted copy
+      if (!hasSameData(stateAfterRead, stateBeforeRestore)) {
+        if (stateAfterRead.data !== undefined) {
+          return stateAfterRead.data as T
+        }
+      } else if (persistedQuery) {
+        const restoredData = persistedQuery.state.data as T
+
+        if (calledFromFetch) {
+          if (ctx.signal.aborted) {
+            throw new CancelledError()
           }
-        },
-      )
 
-      if (restoredData !== undefined) {
-        return Promise.resolve(restoredData as T)
+          // Resolving the fetch with the persisted data would let it overwrite anything written
+          // before the fetch settles. Store it now instead, and end the fetch keeping that state.
+          query.setData(restoredData, {
+            updatedAt: persistedQuery.state.dataUpdatedAt,
+            manual: true,
+          })
+          void query.cancel({ revert: true })
+        }
+
+        scheduleAfterRestore(query, persistedQuery, query.state)
+
+        // We must resolve the promise here, as otherwise we will have `loading` state in the app until `queryFn` resolves
+        return restoredData
       }
     }
 
@@ -279,6 +334,10 @@ export function experimental_createQueryPersister<TStorageValue = string>({
 
     if (storage?.entries) {
       const storageKeyPrefix = `${prefix}-`
+      const queryCache = queryClient.getQueryCache()
+      const statesBeforeRestore = new Map(
+        queryCache.getAll().map((query) => [query.queryHash, query.state]),
+      )
       const entries = await storage.entries()
       for (const [key, value] of entries) {
         if (key.startsWith(storageKeyPrefix)) {
@@ -291,6 +350,19 @@ export function experimental_createQueryPersister<TStorageValue = string>({
           }
           if (isExpiredOrBusted(persistedQuery)) {
             await storage.removeItem(key)
+            continue
+          }
+
+          const { queryHash } = queryClient.defaultQueryOptions({
+            queryKey: persistedQuery.queryKey,
+          })
+          // Do not replace data that was written while storage was being read
+          if (
+            !hasSameData(
+              queryCache.get(queryHash)?.state,
+              statesBeforeRestore.get(queryHash),
+            )
+          ) {
             continue
           }
 
