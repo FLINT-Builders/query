@@ -1,5 +1,11 @@
-import { getCurrentScope, onScopeDispose, ref, watchEffect } from 'vue-demi'
-import { useQueryClient } from './useQueryClient'
+import {
+  getCurrentScope,
+  onScopeDispose,
+  ref,
+  watch,
+  watchEffect,
+} from 'vue-demi'
+import { useTrackedQueryClient } from './useTrackedQueryClient'
 import { cloneDeepUnref } from './utils'
 import type { Ref } from 'vue-demi'
 import type { QueryFilters } from '@tanstack/query-core'
@@ -63,7 +69,7 @@ export function useIsFetching(
     }
   }
 
-  const client = queryClient || useQueryClient()
+  const client = useTrackedQueryClient(queryClient)
 
   const isFetching = ref()
 
@@ -72,10 +78,15 @@ export function useIsFetching(
       typeof fetchingFilters === 'function'
         ? fetchingFilters()
         : fetchingFilters
-    isFetching.value = client.isFetching(cloneDeepUnref(resolvedFilters))
+    isFetching.value = client.value.isFetching(cloneDeepUnref(resolvedFilters))
   }
 
-  const unsubscribe = client.getQueryCache().subscribe(listener)
+  let unsubscribe = client.value.getQueryCache().subscribe(listener)
+
+  watch(client, (current) => {
+    unsubscribe()
+    unsubscribe = current.getQueryCache().subscribe(listener)
+  })
 
   watchEffect(listener)
 

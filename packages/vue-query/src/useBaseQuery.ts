@@ -10,7 +10,7 @@ import {
   watch,
 } from 'vue-demi'
 import { shouldThrowError } from '@tanstack/query-core'
-import { useQueryClient } from './useQueryClient'
+import { useTrackedQueryClient } from './useTrackedQueryClient'
 import { cloneDeepUnref, updateState } from './utils'
 import type { Ref } from 'vue-demi'
 import type {
@@ -87,7 +87,7 @@ export function useBaseQuery<
     }
   }
 
-  const client = queryClient || useQueryClient()
+  const client = useTrackedQueryClient(queryClient)
 
   const defaultedOptions = computed(() => {
     let resolvedOptions = options
@@ -106,16 +106,17 @@ export function useBaseQuery<
       TData,
       TQueryData,
       TQueryKey
-    > = client.defaultQueryOptions(clonedOptions)
+    > = client.value.defaultQueryOptions(clonedOptions)
 
-    defaulted._optimisticResults = client.isRestoring?.value
+    defaulted._optimisticResults = client.value.isRestoring?.value
       ? 'isRestoring'
       : 'optimistic'
 
     return defaulted
   })
 
-  const observer = new Observer(client, defaultedOptions.value)
+  let observerClient = client.value
+  let observer = new Observer(observerClient, defaultedOptions.value)
   // @ts-expect-error
   const state = defaultedOptions.value.shallow
     ? shallowReactive(observer.getCurrentResult())
@@ -125,25 +126,64 @@ export function useBaseQuery<
     // noop
   }
 
-  if (client.isRestoring) {
-    watch(
-      client.isRestoring,
-      (isRestoring) => {
-        if (!isRestoring) {
-          unsubscribe()
-          unsubscribe = observer.subscribe((result) => {
-            updateState(state, result)
-          })
-        }
-      },
-      { immediate: true },
-    )
+  const subscribe = () => {
+    unsubscribe()
+    unsubscribe = observer.subscribe((result) => {
+      updateState(state, result)
+    })
+  }
+
+  // Replaces the observer once the provided client changes, so nothing keeps fetching on the previous client.
+  const bindObserver = () => {
+    const current = client.value
+    if (current === observerClient) {
+      return false
+    }
+    unsubscribe()
+    unsubscribe = () => {
+      // noop
+    }
+    observerClient = current
+    observer = new Observer(current, defaultedOptions.value)
+    if (current.isRestoring && !current.isRestoring.value) {
+      subscribe()
+    }
+    updateState(state, observer.getCurrentResult())
+    return true
+  }
+
+  watch(
+    () => client.value.isRestoring?.value,
+    (isRestoring) => {
+      if (!bindObserver() && client.value.isRestoring && !isRestoring) {
+        subscribe()
+      }
+    },
+    { immediate: true },
+  )
+
+  const syncObserver = () => {
+    if (!bindObserver()) {
+      observer.setOptions(defaultedOptions.value)
+    }
   }
 
   const updater = () => {
-    observer.setOptions(defaultedOptions.value)
+    syncObserver()
     updateState(state, observer.getCurrentResult())
   }
+
+  // Keeps the returned state in step with the client and options as soon as they change. Fetching for new
+  // options still waits for `updater`, so several changes in one tick start a single fetch.
+  watch(
+    defaultedOptions,
+    (nextOptions) => {
+      if (!bindObserver()) {
+        updateState(state, observer.getOptimisticResult(nextOptions))
+      }
+    },
+    { flush: 'sync' },
+  )
 
   watch(defaultedOptions, updater)
 
@@ -166,7 +206,7 @@ export function useBaseQuery<
         const run = () => {
           if (defaultedOptions.value.enabled !== false) {
             // fix #6133
-            observer.setOptions(defaultedOptions.value)
+            syncObserver()
             const optimisticResult = observer.getOptimisticResult(
               defaultedOptions.value,
             )
@@ -225,7 +265,10 @@ export function useBaseQuery<
   const object: any = toRefs(readonlyState)
   for (const key in state) {
     if (typeof state[key as keyof typeof state] === 'function') {
-      object[key] = state[key as keyof typeof state]
+      object[key] = (...args: Array<unknown>) => {
+        bindObserver()
+        return (state as any)[key](...args)
+      }
     }
   }
 

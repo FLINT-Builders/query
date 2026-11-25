@@ -1,5 +1,6 @@
 import { isRef, unref } from 'vue-demi'
 import type { MaybeRefDeep } from './types'
+import type { QueryClient } from './queryClient'
 
 /** @internal Base Vue injection key `VueQueryPlugin` provides the `QueryClient` under. */
 export const VUE_QUERY_CLIENT = 'VUE_QUERY_CLIENT'
@@ -8,6 +9,22 @@ export const VUE_QUERY_CLIENT = 'VUE_QUERY_CLIENT'
 export function getClientKey(key?: string) {
   const suffix = key ? `:${key}` : ''
   return `${VUE_QUERY_CLIENT}${suffix}`
+}
+
+/**
+ * @internal Tracks the client a Vue 3 app provides under one client key, including clients provided later with
+ * `app.provide`.
+ */
+export interface QueryClientSource {
+  /** The client the app currently provides. Reactive. */
+  current: () => QueryClient | undefined
+  /** Runs `read` and reports whether it read the client from the app-level entry rather than a component's own. */
+  readsFromApp: (read: () => void) => boolean
+}
+
+/** @internal Builds the injection key `VueQueryPlugin` provides the {@link QueryClientSource} for `clientKey` under. */
+export function getClientSourceKey(clientKey: string) {
+  return Symbol.for(`${clientKey}:source`)
 }
 
 /** @internal Copies each property from `update` onto `state`, in place, for every key already on `state`. */
