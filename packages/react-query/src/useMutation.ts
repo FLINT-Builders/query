@@ -7,6 +7,7 @@ import {
   shouldThrowError,
 } from '@tanstack/query-core'
 import { useQueryClient } from './QueryClientProvider'
+import { useClientObserver } from './useClientObserver'
 import type {
   UseMutateFunction,
   UseMutationOptions,
@@ -199,7 +200,8 @@ export function useMutation<
 ): UseMutationResult<TData, TError, TVariables, TOnMutateResult> {
   const client = useQueryClient(queryClient)
 
-  const [observer] = React.useState(
+  const observer = useClientObserver(
+    client,
     () =>
       new MutationObserver<TData, TError, TVariables, TOnMutateResult>(
         client,
