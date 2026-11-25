@@ -1,4 +1,4 @@
-import { dehydrate, hydrate } from '@tanstack/query-core'
+import { dehydrate, hydrate, notifyManager } from '@tanstack/query-core'
 import type {
   DehydrateOptions,
   DehydratedState,
@@ -63,6 +63,52 @@ function isCacheEventType(eventType: NotifyEventType) {
 }
 
 /**
+ * Hydrates the persisted state, or leaves the caches as they were.
+ * `hydrate` applies entries one by one, so an entry that throws would
+ * otherwise leave every entry before it in memory, where it can be read
+ * and persisted again.
+ */
+function hydrateOrRollback(
+  queryClient: QueryClient,
+  dehydratedState: DehydratedState,
+  hydrateOptions?: HydrateOptions,
+) {
+  const queryCache = queryClient.getQueryCache()
+  const mutationCache = queryClient.getMutationCache()
+  const previousQueryStates = new Map(
+    queryCache.getAll().map((query) => [query, query.state]),
+  )
+  const previousMutations = new Set(mutationCache.getAll())
+
+  try {
+    hydrate(queryClient, dehydratedState, hydrateOptions)
+  } catch (error) {
+    notifyManager.batch(() => {
+      queryCache.getAll().forEach((query) => {
+        const previousState = previousQueryStates.get(query)
+        if (!previousState) {
+          queryCache.remove(query)
+        } else if (query.state !== previousState) {
+          if (
+            previousState.fetchStatus !== 'fetching' &&
+            query.state.fetchStatus === 'fetching'
+          ) {
+            void query.cancel({ silent: true })
+          }
+          query.setState(previousState)
+        }
+      })
+      mutationCache.getAll().forEach((mutation) => {
+        if (!previousMutations.has(mutation)) {
+          mutationCache.remove(mutation)
+        }
+      })
+    })
+    throw error
+  }
+}
+
+/**
  * Restores persisted data to the QueryCache
  *  - data obtained from persister.restoreClient
  *  - data is hydrated using hydrateOptions
@@ -85,7 +131,11 @@ export async function persistQueryClientRestore({
         if (expired || busted) {
           return persister.removeClient()
         } else {
-          hydrate(queryClient, persistedClient.clientState, hydrateOptions)
+          hydrateOrRollback(
+            queryClient,
+            persistedClient.clientState,
+            hydrateOptions,
+          )
         }
       } else {
         return persister.removeClient()
