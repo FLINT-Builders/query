@@ -398,6 +398,8 @@ We also have an extensive [offline example](../examples/offline) that covers bot
 
 Per default, all mutations run in parallel - even if you invoke `.mutate()` of the same mutation multiple times. Mutations can be given a `scope` with an `id` to avoid that. All mutations with the same `scope.id` will run in serial, which means when they are triggered, they will start in `isPaused: true` state if there is already a mutation for that scope in progress. They will be put into a queue and will automatically resume once their time in the queue has come.
 
+Paused mutations restored with `hydrate` (for example by the persistQueryClient plugin) only join their scope's queue once they are resumed, e.g. with `queryClient.resumePausedMutations()`. Until then, they do not hold up new mutations in that scope.
+
 [//]: # 'ExampleScopes'
 
 ```tsx

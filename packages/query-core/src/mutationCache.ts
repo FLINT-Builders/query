@@ -155,6 +155,16 @@ export class MutationCache extends Subscribable<MutationCacheListener> {
   /** @internal */
   add(mutation: Mutation<any, any, any, any>): void {
     this.#mutations.add(mutation)
+    // A mutation restored in a `pending` state (e.g. via `hydrate`) only joins its scope's
+    // queue once it is started, so a restored mutation that is never resumed cannot hold
+    // up every later mutation in that scope.
+    if (mutation.state.status !== 'pending') {
+      this.#addToScope(mutation)
+    }
+    this.notify({ type: 'added', mutation })
+  }
+
+  #addToScope(mutation: Mutation<any, any, any, any>): void {
     const scope = scopeFor(mutation)
     if (typeof scope === 'string') {
       const scopedMutations = this.#scopes.get(scope)
@@ -164,7 +174,6 @@ export class MutationCache extends Subscribable<MutationCacheListener> {
         this.#scopes.set(scope, [mutation])
       }
     }
-    this.notify({ type: 'added', mutation })
   }
 
   /** @internal */
@@ -195,6 +204,14 @@ export class MutationCache extends Subscribable<MutationCacheListener> {
   canRun(mutation: Mutation<any, any, any, any>): boolean {
     const scope = scopeFor(mutation)
     if (typeof scope === 'string') {
+      // `canRun` is first called when a mutation is started, which is when a restored
+      // mutation joins its scope's queue (see `add`)
+      if (
+        this.#mutations.has(mutation) &&
+        !this.#scopes.get(scope)?.includes(mutation)
+      ) {
+        this.#addToScope(mutation)
+      }
       const mutationsWithSameScope = this.#scopes.get(scope)
       const firstPendingMutation = mutationsWithSameScope?.find(
         (m) => m.state.status === 'pending',

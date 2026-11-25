@@ -273,13 +273,17 @@ export function hydrate(
     options?.defaultOptions?.deserializeData ??
     client.getDefaultOptions().hydrate?.deserializeData
 
-  dehydratedState.mutations?.forEach(({ state, ...mutationOptions }) => {
+  dehydratedState.mutations?.forEach(({ mutationKey, meta, scope, state }) => {
+    // Only restore the options `dehydrateMutation` writes; anything else in the
+    // dehydrated state (e.g. `retry` or `networkMode`) must come from the client's own config.
     mutationCache.build(
       client,
       {
         ...client.getDefaultOptions().hydrate?.mutations,
         ...options?.defaultOptions?.mutations,
-        ...mutationOptions,
+        ...(mutationKey && { mutationKey }),
+        ...(meta && { meta }),
+        ...(scope && { scope }),
       },
       state,
     )
