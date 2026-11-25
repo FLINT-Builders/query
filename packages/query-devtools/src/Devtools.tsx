@@ -26,6 +26,7 @@ import {
   getQueryStatusColorByLabel,
   getQueryStatusLabel,
   getSidedProp,
+  getSortFnName,
   mutationSortFns,
   sortFns,
 } from './utils'
@@ -689,22 +690,26 @@ export const ContentView: Component<ContentViewProps> = (props) => {
     'queries',
   )
 
-  const sort = createMemo(() => props.localStore.sort || DEFAULT_SORT_FN_NAME)
+  const sort = createMemo(() =>
+    getSortFnName(sortFns, props.localStore.sort, DEFAULT_SORT_FN_NAME),
+  )
   const sortOrder = createMemo(
     () => Number(props.localStore.sortOrder) || DEFAULT_SORT_ORDER,
   ) as () => 1 | -1
 
-  const mutationSort = createMemo(
-    () => props.localStore.mutationSort || DEFAULT_MUTATION_SORT_FN_NAME,
+  const mutationSort = createMemo(() =>
+    getSortFnName(
+      mutationSortFns,
+      props.localStore.mutationSort,
+      DEFAULT_MUTATION_SORT_FN_NAME,
+    ),
   )
   const mutationSortOrder = createMemo(
     () => Number(props.localStore.mutationSortOrder) || DEFAULT_SORT_ORDER,
   ) as () => 1 | -1
 
-  const sortFn = createMemo(() => sortFns[sort() as string])
-  const mutationSortFn = createMemo(
-    () => mutationSortFns[mutationSort() as string],
-  )
+  const sortFn = createMemo(() => sortFns[sort()])
+  const mutationSortFn = createMemo(() => mutationSortFns[mutationSort()])
 
   const onlineManager = createMemo(
     () => useQueryDevtoolsContext().onlineManager,

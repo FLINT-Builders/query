@@ -147,6 +147,21 @@ export const mutationSortFns: Record<string, MutationSortFn> = {
   'last updated': mutationDateSort,
 }
 
+/**
+ * Returns `name` when it is an own key of `sortFnMap`, otherwise `fallback`.
+ * Saved sort names come from web storage, so inherited keys such as
+ * `constructor` must not be treated as sort functions.
+ */
+export const getSortFnName = (
+  sortFnMap: Record<string, unknown>,
+  name: unknown,
+  fallback: string,
+): string =>
+  typeof name === 'string' &&
+  Object.prototype.hasOwnProperty.call(sortFnMap, name)
+    ? name
+    : fallback
+
 export const convertRemToPixels = (rem: number) => {
   return rem * parseFloat(getComputedStyle(document.documentElement).fontSize)
 }

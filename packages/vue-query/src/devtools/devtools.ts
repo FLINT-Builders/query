@@ -5,6 +5,7 @@ import {
   getQueryStateLabel,
   getQueryStatusBg,
   getQueryStatusFg,
+  getSortFn,
   sortFns,
 } from './utils'
 import type { CustomInspectorNode } from '@vue/devtools-api'
@@ -188,8 +189,9 @@ export function setupDevtools(app: any, queryClient: QueryClient) {
               )
             : [...queries]
 
+          const sortFn = getSortFn(settings.sortFn)
           const sorted = filtered.sort(
-            (a, b) => sortFns[settings.sortFn]!(a, b) * settings.baseSort,
+            (a, b) => sortFn(a, b) * settings.baseSort,
           )
 
           const nodes: Array<CustomInspectorNode> = sorted.map((query) => {
