@@ -402,7 +402,7 @@ describe('mutation', () => {
     expect(onSettled).not.toHaveBeenCalled()
   })
 
-  it('mutation callbacks should see updated options', async () => {
+  it('mutation callbacks should not be replaced by options updated while pending', async () => {
     const onSuccess = vi.fn()
 
     const mutation = new MutationObserver(queryClient, {
@@ -424,7 +424,7 @@ describe('mutation', () => {
     await vi.advanceTimersByTimeAsync(100)
     expect(onSuccess).toHaveBeenCalledTimes(1)
 
-    expect(onSuccess).toHaveBeenCalledWith(2)
+    expect(onSuccess).toHaveBeenCalledWith(1)
   })
 
   describe('scoped mutations', () => {

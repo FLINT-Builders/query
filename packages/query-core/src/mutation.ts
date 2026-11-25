@@ -282,23 +282,24 @@ export class Mutation<
    * @see {@link Mutation#continue}
    */
   async execute(variables: TVariables): Promise<TData> {
+    const options = this.options
     const onContinue = () => {
       this.#dispatch({ type: 'continue' })
     }
 
     const mutationFnContext = {
       client: this.#client,
-      meta: this.options.meta,
-      mutationKey: this.options.mutationKey,
+      meta: options.meta,
+      mutationKey: options.mutationKey,
     } satisfies MutationFunctionContext
 
     const retryer = (this.#retryer = createRetryer({
       fn: () => {
-        if (!this.options.mutationFn) {
+        if (!options.mutationFn) {
           return Promise.reject(new Error('No mutationFn found'))
         }
 
-        return this.options.mutationFn(variables, mutationFnContext)
+        return options.mutationFn(variables, mutationFnContext)
       },
       onFail: (failureCount, error) => {
         this.#dispatch({ type: 'failed', failureCount, error })
@@ -307,9 +308,9 @@ export class Mutation<
         this.#dispatch({ type: 'pause' })
       },
       onContinue,
-      retry: this.options.retry ?? 0,
-      retryDelay: this.options.retryDelay,
-      networkMode: this.options.networkMode,
+      retry: options.retry ?? 0,
+      retryDelay: options.retryDelay,
+      networkMode: options.networkMode,
       canRun: () => this.#mutationCache.canRun(this),
     }))
 
@@ -330,10 +331,7 @@ export class Mutation<
             mutationFnContext,
           )
         }
-        const context = await this.options.onMutate?.(
-          variables,
-          mutationFnContext,
-        )
+        const context = await options.onMutate?.(variables, mutationFnContext)
         if (context !== this.state.context) {
           this.#dispatch({
             type: 'pending',
@@ -354,7 +352,7 @@ export class Mutation<
         mutationFnContext,
       )
 
-      await this.options.onSuccess?.(
+      await options.onSuccess?.(
         data,
         variables,
         this.state.context!,
@@ -371,7 +369,7 @@ export class Mutation<
         mutationFnContext,
       )
 
-      await this.options.onSettled?.(
+      await options.onSettled?.(
         data,
         null,
         variables,
@@ -396,7 +394,7 @@ export class Mutation<
       }
 
       try {
-        await this.options.onError?.(
+        await options.onError?.(
           error as TError,
           variables,
           this.state.context,
@@ -421,7 +419,7 @@ export class Mutation<
       }
 
       try {
-        await this.options.onSettled?.(
+        await options.onSettled?.(
           undefined,
           error as TError,
           variables,
