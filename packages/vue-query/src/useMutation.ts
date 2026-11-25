@@ -11,7 +11,7 @@ import {
 } from 'vue-demi'
 import { MutationObserver, shouldThrowError } from '@tanstack/query-core'
 import { cloneDeepUnref, updateState } from './utils'
-import { useQueryClient } from './useQueryClient'
+import { useTrackedQueryClient } from './useTrackedQueryClient'
 import type { ToRefs } from 'vue-demi'
 import type {
   DefaultError,
@@ -245,32 +245,64 @@ export function useMutation<
     }
   }
 
-  const client = queryClient || useQueryClient()
+  const client = useTrackedQueryClient(queryClient)
   const defaultedOptions = computed(() => {
     const resolvedOptions = typeof options === 'function' ? options() : options
-    return client.defaultMutationOptions(cloneDeepUnref(resolvedOptions))
+    return client.value.defaultMutationOptions(cloneDeepUnref(resolvedOptions))
   })
-  const observer = new MutationObserver(client, defaultedOptions.value)
+  let observerClient = client.value
+  let observer = new MutationObserver(observerClient, defaultedOptions.value)
   const state = defaultedOptions.value.shallow
     ? shallowReactive(observer.getCurrentResult())
     : reactive(observer.getCurrentResult())
 
-  const unsubscribe = observer.subscribe((result) => {
+  const listener = (
+    result: MutationObserverResult<TData, TError, TVariables, TOnMutateResult>,
+  ) => {
     updateState(state, result)
-  })
+  }
+  let unsubscribe = observer.subscribe(listener)
+
+  // A mutation keeps the client it started on. Once the provided client changes, the next call gets an observer
+  // on the new client, and results of mutations started on the old one no longer reach this composable.
+  const bindObserver = () => {
+    const current = client.value
+    if (current === observerClient) {
+      return observer
+    }
+    unsubscribe()
+    observerClient = current
+    observer = new MutationObserver(current, defaultedOptions.value)
+    unsubscribe = observer.subscribe(listener)
+    updateState(state, observer.getCurrentResult())
+    return observer
+  }
+
+  const mutateAsync: MutateFunction<
+    TData,
+    TError,
+    TVariables,
+    TOnMutateResult
+  > = (...args) => bindObserver().mutate(args[0] as TVariables, args[1])
 
   const mutate = (
     ...args: Parameters<
       MutateFunction<TData, TError, TVariables, TOnMutateResult>
     >
   ) => {
-    observer.mutate(args[0] as TVariables, args[1]).catch(() => {
+    mutateAsync(...args).catch(() => {
       // This is intentional
     })
   }
 
+  const reset = () => {
+    bindObserver().reset()
+  }
+
   watch(defaultedOptions, () => {
-    observer.setOptions(defaultedOptions.value)
+    if (observerClient === client.value) {
+      observer.setOptions(defaultedOptions.value)
+    }
   })
 
   onScopeDispose(() => {
@@ -300,7 +332,7 @@ export function useMutation<
   return {
     ...resultRefs,
     mutate,
-    mutateAsync: state.mutate,
-    reset: state.reset,
+    mutateAsync,
+    reset,
   }
 }

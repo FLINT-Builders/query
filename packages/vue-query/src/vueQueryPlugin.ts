@@ -1,12 +1,61 @@
-import { isVue2 } from 'vue-demi'
+import { isVue2, shallowRef } from 'vue-demi'
 import { environmentManager } from '@tanstack/query-core'
 
 import { QueryClient } from './queryClient'
-import { getClientKey } from './utils'
+import { getClientKey, getClientSourceKey } from './utils'
 import { setupDevtools } from './devtools/devtools'
 import type { QueryClientConfig } from './types'
+import type { QueryClientSource } from './utils'
 
 type ClientPersister = (client: QueryClient) => [() => void, Promise<void>]
+
+/**
+ * Backs the app-level `clientKey` entry with a ref, so composables that are already mounted can follow a client
+ * provided later with `app.provide(clientKey, nextClient)`.
+ */
+function trackProvidedClient(app: any, clientKey: string) {
+  const provides: Record<PropertyKey, unknown> | undefined =
+    app._context?.provides
+  if (!provides) {
+    return
+  }
+
+  const current = shallowRef(provides[clientKey] as QueryClient | undefined)
+  let reads = 0
+
+  Object.defineProperty(provides, clientKey, {
+    configurable: true,
+    enumerable: true,
+    get() {
+      reads++
+      return current.value
+    },
+    set(this: object, value: QueryClient | undefined) {
+      if (this === provides) {
+        current.value = value
+        return
+      }
+      // A component's `provide()` assigns on an object that inherits from the app's provides. It must get its own
+      // entry, which shadows the app-level client for that subtree only.
+      Object.defineProperty(this, clientKey, {
+        configurable: true,
+        enumerable: true,
+        writable: true,
+        value,
+      })
+    },
+  })
+
+  const source: QueryClientSource = {
+    current: () => current.value,
+    readsFromApp: (read) => {
+      const before = reads
+      read()
+      return reads !== before
+    },
+  }
+  app.provide(getClientSourceKey(clientKey), source)
+}
 
 interface CommonOptions {
   /** Enables the legacy Vue Devtools v6 plugin panel. Prefer `@tanstack/vue-query-devtools` for Vue 3 apps. */
@@ -144,6 +193,7 @@ export const VueQueryPlugin = {
       })
     } else {
       app.provide(clientKey, client)
+      trackProvidedClient(app, clientKey)
 
       if (process.env.NODE_ENV === 'development') {
         if (options.enableDevtoolsV6Plugin) {

@@ -6,7 +6,7 @@ import {
   shallowRef,
   watch,
 } from 'vue-demi'
-import { useQueryClient } from './useQueryClient'
+import { useTrackedQueryClient } from './useTrackedQueryClient'
 import { cloneDeepUnref } from './utils'
 import type { Ref } from 'vue-demi'
 import type {
@@ -62,8 +62,6 @@ export function useIsMutating(
     }
   }
 
-  const client = queryClient || useQueryClient()
-
   const mutationState = useMutationState(
     {
       filters: computed(() => ({
@@ -71,7 +69,7 @@ export function useIsMutating(
         status: 'pending' as const,
       })),
     },
-    client,
+    queryClient,
   )
   const length = computed(() => mutationState.value.length)
 
@@ -210,15 +208,25 @@ export function useMutationState<
       select: newOptions.select,
     }
   })
-  const mutationCache = (queryClient || useQueryClient()).getMutationCache()
-  const state = shallowRef(getResult(mutationCache, resolvedOptions.value))
-  const unsubscribe = mutationCache.subscribe(() => {
-    state.value = getResult(mutationCache, resolvedOptions.value)
+  const client = useTrackedQueryClient(queryClient)
+  const state = shallowRef(
+    getResult(client.value.getMutationCache(), resolvedOptions.value),
+  )
+  const update = () => {
+    state.value = getResult(
+      client.value.getMutationCache(),
+      resolvedOptions.value,
+    )
+  }
+  let unsubscribe = client.value.getMutationCache().subscribe(update)
+
+  watch(client, (current) => {
+    unsubscribe()
+    unsubscribe = current.getMutationCache().subscribe(update)
+    update()
   })
 
-  watch(resolvedOptions, () => {
-    state.value = getResult(mutationCache, resolvedOptions.value)
-  })
+  watch(resolvedOptions, update)
 
   onScopeDispose(() => {
     unsubscribe()
