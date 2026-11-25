@@ -133,19 +133,18 @@ export function useMutationState<
   const client = createMemo(() => resolveClient())
   const mutationCache = createMemo(() => client().getMutationCache())
 
-  const [result, setResult] = createSignal(
-    getResult(mutationCache(), options()),
-  )
+  const [cacheVersion, setCacheVersion] = createSignal(0)
+
+  // Must stay derived from the resolved cache: a swapped-in QueryClient does
+  // not emit cache events, so a stored snapshot would keep the old client's mutations.
+  const result = createMemo<Array<TResult>>((previous) => {
+    cacheVersion()
+    return replaceEqualDeep(previous, getResult(mutationCache(), options()))
+  })
 
   createEffect(() => {
     const unsubscribe = mutationCache().subscribe(() => {
-      const nextResult = replaceEqualDeep(
-        result(),
-        getResult(mutationCache(), options()),
-      )
-      if (result() !== nextResult) {
-        setResult(nextResult)
-      }
+      setCacheVersion((version) => version + 1)
     })
 
     onCleanup(unsubscribe)
