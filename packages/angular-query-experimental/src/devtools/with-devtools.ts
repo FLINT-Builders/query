@@ -95,6 +95,9 @@ export const withDevtools: WithDevtools = (
 
           let devtools: TanstackQueryDevtools | null = null
           let el: HTMLElement | null = null
+          // Identifies the only devtools load allowed to mount devtools.
+          // Clearing it makes any in-flight load discard its result.
+          let pendingLoad: object | null = null
 
           const shouldLoadToolsSignal = computed(() => {
             const { loadDevtools } = devtoolsOptions()
@@ -112,9 +115,11 @@ export const withDevtools: WithDevtools = (
           }
 
           const destroyDevtools = () => {
+            pendingLoad = null
             devtools?.unmount()
             el?.remove()
             devtools = null
+            el = null
           }
 
           effect(
@@ -130,8 +135,7 @@ export const withDevtools: WithDevtools = (
               } = devtoolsOptions()
 
               if (!shouldLoadTools) {
-                // Destroy or do nothing
-                devtools && destroyDevtools()
+                destroyDevtools()
                 return
               }
 
@@ -147,11 +151,17 @@ export const withDevtools: WithDevtools = (
                 return
               }
 
+              if (pendingLoad) return
+
               // Create devtools
+              const load = {}
+              pendingLoad = load
               import('@tanstack/query-devtools')
                 .then((queryDevtools) => {
+                  if (pendingLoad !== load) return
+                  pendingLoad = null
                   // As this code runs async, the injector could have been destroyed
-                  if (injectorIsDestroyed) return
+                  if (injectorIsDestroyed || !shouldLoadToolsSignal()) return
 
                   devtools = new queryDevtools.TanstackQueryDevtools({
                     ...devtoolsOptions(),
@@ -168,6 +178,7 @@ export const withDevtools: WithDevtools = (
                   destroyRef.onDestroy(destroyDevtools)
                 })
                 .catch((error) => {
+                  if (pendingLoad === load) pendingLoad = null
                   console.error(
                     'Install @tanstack/query-devtools or reinstall without --omit=optional.',
                     error,
