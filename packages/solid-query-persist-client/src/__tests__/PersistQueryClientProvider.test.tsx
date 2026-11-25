@@ -584,6 +584,9 @@ describe('PersistQueryClientProvider', () => {
     render(() => <App />)
 
     await vi.advanceTimersByTimeAsync(10)
+    expect(screen.getByText('hydrated')).toBeInTheDocument()
+    expect(queryFn2).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(10)
     expect(screen.getByText('queryFn2')).toBeInTheDocument()
 
     expect(queryFn1).toHaveBeenCalledTimes(0)

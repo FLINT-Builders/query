@@ -6,10 +6,12 @@ import {
   createMemo,
   createRenderEffect,
   createResource,
+  createSignal,
   mergeProps,
   on,
   onCleanup,
   onMount,
+  untrack,
 } from 'solid-js'
 import { useQueryClientResolver } from './QueryClientProvider'
 import { useIsRestoring } from './isRestoring'
@@ -300,49 +302,51 @@ export function useQueries<
     ),
   )
 
-  const observer = new QueriesObserver(
-    client(),
-    defaultedQueries(),
+  const observerOptions = () =>
     queriesOptions().combine
       ? ({
           combine: queriesOptions().combine,
         } as QueriesObserverOptions<TCombinedResult>)
-      : undefined,
+      : undefined
+
+  let observerClient = client()
+  const [observer, setObserver] = createSignal(
+    new QueriesObserver<TCombinedResult>(
+      observerClient,
+      defaultedQueries(),
+      observerOptions(),
+    ),
   )
 
-  const [state, setState] = createStore<TCombinedResult>(
-    observer.getOptimisticResult(
+  const getOptimisticState = (obs: QueriesObserver<TCombinedResult>) =>
+    obs.getOptimisticResult(
       defaultedQueries(),
       (queriesOptions() as QueriesObserverOptions<TCombinedResult>).combine,
-    )[1](),
+    )[1]()
+
+  const [state, setState] = createStore<TCombinedResult>(
+    getOptimisticState(observer()),
   )
 
   createRenderEffect(
     on(
       () => queriesOptions().queries.length,
-      () =>
-        setState(
-          observer.getOptimisticResult(
-            defaultedQueries(),
-            (queriesOptions() as QueriesObserverOptions<TCombinedResult>)
-              .combine,
-          )[1](),
-        ),
+      () => setState(getOptimisticState(observer())),
     ),
   )
 
+  // Resources are recreated for every observer, so a load that started for a
+  // previous client's observer can never settle into the resources being read
   const dataResources = createMemo(
-    on(
-      () => state.length,
-      () =>
-        state.map((queryRes) => {
-          const dataPromise = () =>
-            new Promise((resolve) => {
-              if (queryRes.isFetching && queryRes.isLoading) return
-              resolve(unwrap(queryRes.data))
-            })
-          return createResource(dataPromise)
-        }),
+    on([() => state.length, observer], () =>
+      state.map((queryRes) => {
+        const dataPromise = () =>
+          new Promise((resolve) => {
+            if (queryRes.isFetching && queryRes.isLoading) return
+            resolve(unwrap(queryRes.data))
+          })
+        return createResource(dataPromise)
+      }),
     ),
   )
 
@@ -356,9 +360,11 @@ export function useQueries<
   })
 
   let taskQueue: Array<() => void> = []
-  const subscribeToObserver = () =>
-    observer.subscribe((result) => {
+  const subscribeToObserver = (obs: QueriesObserver<TCombinedResult>) =>
+    obs.subscribe((result) => {
+      if (obs !== observer()) return
       taskQueue.push(() => {
+        if (obs !== observer()) return
         batch(() => {
           const dataResources_ = dataResources()
           for (let index = 0; index < dataResources_.length; index++) {
@@ -382,32 +388,31 @@ export function useQueries<
   let unsubscribe: () => void = noop
   createComputed<() => void>((cleanup) => {
     cleanup?.()
-    unsubscribe = isRestoring() ? noop : subscribeToObserver()
+    const obs = observer()
+    unsubscribe = isRestoring() ? noop : subscribeToObserver(obs)
     // cleanup needs to be scheduled after synchronous effects take place
     return () => queueMicrotask(unsubscribe)
   })
-  onCleanup(unsubscribe)
+  onCleanup(() => unsubscribe())
 
   onMount(() => {
-    observer.setQueries(
-      defaultedQueries(),
-      queriesOptions().combine
-        ? ({
-            combine: queriesOptions().combine,
-          } as QueriesObserverOptions<TCombinedResult>)
-        : undefined,
-    )
+    observer().setQueries(defaultedQueries(), observerOptions())
   })
 
+  // A client change replaces the observer in the same computation that would
+  // otherwise pass the new client's options to the previous client's observer
   createComputed(() => {
-    observer.setQueries(
-      defaultedQueries(),
-      queriesOptions().combine
-        ? ({
-            combine: queriesOptions().combine,
-          } as QueriesObserverOptions<TCombinedResult>)
-        : undefined,
-    )
+    const c = client()
+    const queries = defaultedQueries()
+    const options = observerOptions()
+    if (c !== observerClient) {
+      observerClient = c
+      const obs = new QueriesObserver<TCombinedResult>(c, queries, options)
+      setState(getOptimisticState(obs))
+      setObserver(obs)
+    } else {
+      untrack(observer).setQueries(queries, options)
+    }
   })
 
   const handler = (index: number) => ({
