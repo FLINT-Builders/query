@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onMount, untrack } from 'svelte'
   import { BROWSER, DEV } from 'esm-env'
   import { onlineManager, useQueryClient } from '@tanstack/svelte-query'
   import type { QueryClient } from '@tanstack/svelte-query'
@@ -61,7 +61,7 @@
     initialIsOpen = false,
     buttonPosition = 'bottom-right',
     position = 'bottom',
-    client = useQueryClient(),
+    client: clientProp = undefined,
     errorTypes = [],
     styleNonce = undefined,
     shadowDOMTarget = undefined,
@@ -69,12 +69,38 @@
     theme = 'system',
   }: DevtoolsOptions = $props()
 
+  // Context can only be read during initialization, so the context client is
+  // captured here for when the `client` prop is unset later on.
+  const contextClient = untrack(() => clientProp)
+    ? getOptionalContextClient()
+    : useQueryClient()
+
+  const client = $derived.by(() => {
+    const resolved = clientProp ?? contextClient
+    if (!resolved) {
+      throw new Error(
+        'No QueryClient was found in Svelte context. Did you forget to wrap your component with QueryClientProvider?',
+      )
+    }
+    return resolved
+  })
+
+  function getOptionalContextClient() {
+    try {
+      return useQueryClient()
+    } catch {
+      return undefined
+    }
+  }
+
   let ref: HTMLDivElement
-  let devtools: TanstackQueryDevtools | undefined
+  let devtools: TanstackQueryDevtools | undefined = $state.raw()
 
   if (DEV && BROWSER) {
     onMount(() => {
+      let destroyed = false
       import('@tanstack/query-devtools').then((m) => {
+        if (destroyed) return
         const QueryDevtools = m.TanstackQueryDevtools
 
         devtools = new QueryDevtools({
@@ -94,7 +120,14 @@
 
         devtools.mount(ref)
       })
-      return () => devtools?.unmount()
+      return () => {
+        destroyed = true
+        devtools?.unmount()
+      }
+    })
+
+    $effect(() => {
+      devtools?.setClient(client)
     })
 
     $effect(() => {
