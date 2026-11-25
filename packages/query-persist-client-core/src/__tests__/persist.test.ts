@@ -5,11 +5,21 @@ import {
   QueryClient,
   dehydrate,
 } from '@tanstack/query-core'
+import { createAsyncStoragePersister } from '../../../query-async-storage-persister/src/index'
 import {
   persistQueryClient,
   persistQueryClientRestore,
   persistQueryClientSubscribe,
 } from '../persist'
+import {
+  FORGED_MUTATION,
+  FORGED_PROFILE,
+  FORGED_SESSION,
+  PERSIST_STORAGE_KEY,
+  createMemoryStorage,
+  forgedValuesStillCached,
+  plantPoisonedQueryCache,
+} from './poisonedPersistCache'
 import { createMockPersister, createSpyPersister } from './utils'
 
 describe('persist', () => {
@@ -295,6 +305,89 @@ describe('persist', () => {
       queryClient.setQueryData(['key'], 'data')
 
       expect(persister.persistClient).not.toHaveBeenCalled()
+    })
+
+    it('does not keep or republish queries applied before a stateless persisted entry', async () => {
+      const consoleError = vi
+        .spyOn(console, 'error')
+        .mockImplementation(() => undefined)
+      const consoleWarn = vi
+        .spyOn(console, 'warn')
+        .mockImplementation(() => undefined)
+
+      const storage = createMemoryStorage()
+      plantPoisonedQueryCache(storage)
+      const persister = createAsyncStoragePersister({
+        storage,
+        throttleTime: 0,
+      })
+
+      queryClient.setQueryData(['profile'], 'real-profile')
+
+      const [unsubscribe, restorePromise] = persistQueryClient({
+        queryClient,
+        persister,
+      })
+
+      await expect(restorePromise).rejects.toThrow()
+      expect(forgedValuesStillCached(queryClient)).toEqual([])
+      expect(queryClient.getQueryData(['profile'])).not.toBe(FORGED_PROFILE)
+      expect(queryClient.getQueryData(['session'])).not.toBe(FORGED_SESSION)
+      expect(
+        queryClient
+          .getMutationCache()
+          .getAll()
+          .some((mutation) => mutation.state.data === FORGED_MUTATION),
+      ).toBe(false)
+
+      queryClient.setQueryData(['unrelated'], 'unrelated-value')
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      const saved = storage.getItem(PERSIST_STORAGE_KEY) ?? ''
+      expect(saved).not.toContain(FORGED_SESSION)
+      expect(saved).not.toContain(FORGED_MUTATION)
+      expect(saved).not.toContain(FORGED_PROFILE)
+
+      unsubscribe()
+      consoleError.mockRestore()
+      consoleWarn.mockRestore()
+    })
+  })
+
+  describe('persistQueryClientRestore partial hydration', () => {
+    it('rolls back queries and mutations copied into memory before hydration throws', async () => {
+      const consoleError = vi
+        .spyOn(console, 'error')
+        .mockImplementation(() => undefined)
+      const consoleWarn = vi
+        .spyOn(console, 'warn')
+        .mockImplementation(() => undefined)
+
+      const storage = createMemoryStorage()
+      plantPoisonedQueryCache(storage)
+      const persister = createAsyncStoragePersister({
+        storage,
+        throttleTime: 0,
+      })
+
+      queryClient.setQueryData(['profile'], 'real-profile')
+
+      await expect(
+        persistQueryClientRestore({
+          queryClient,
+          persister,
+        }),
+      ).rejects.toThrow()
+
+      expect(storage.getItem(PERSIST_STORAGE_KEY)).toBeNull()
+      expect(forgedValuesStillCached(queryClient)).toEqual([])
+      // Cleared entirely, or rolled back to the value from before this restore.
+      expect([undefined, 'real-profile']).toContain(
+        queryClient.getQueryData(['profile']),
+      )
+      expect(queryClient.getQueryData(['session'])).toBeUndefined()
+
+      consoleError.mockRestore()
+      consoleWarn.mockRestore()
     })
   })
 })
