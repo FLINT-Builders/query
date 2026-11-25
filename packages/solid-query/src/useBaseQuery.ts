@@ -114,6 +114,7 @@ export function useBaseQuery<
   queryClient?: Accessor<QueryClient>,
 ) {
   type ResourceData = QueryObserverResult<TData, TError>
+  type Obs = QueryObserver<TQueryFnData, TError, TData, TQueryData, TQueryKey>
 
   const resolveClient = useQueryClientResolver(queryClient)
   const client = createMemo(() => resolveClient())
@@ -138,30 +139,43 @@ export function useBaseQuery<
   })
   const initialOptions = defaultedOptions()
 
+  let observerClient = client()
   const [observer, setObserver] = createSignal(
-    new Observer(client(), defaultedOptions()),
+    new Observer(observerClient, defaultedOptions()),
   )
 
   let observerResult = observer().getOptimisticResult(defaultedOptions())
+  // The resource settles asynchronously, so remember which observer produced
+  // each resolved result and refuse to store it once that observer is replaced
+  const resultSources = new WeakMap<object, Obs>()
+  const resolveFrom = (
+    obs: Obs,
+    resolve: (data: ResourceData) => void,
+    data: ResourceData,
+  ) => {
+    resultSources.set(data, obs)
+    resolve(data)
+  }
   const [state, setState] =
     createStore<QueryObserverResult<TData, TError>>(observerResult)
 
   const createServerSubscriber = (
+    obs: Obs,
     resolve: (
       data: ResourceData | PromiseLike<ResourceData | undefined> | undefined,
     ) => void,
     reject: (reason?: any) => void,
   ) => {
-    return observer().subscribe((result) => {
+    return obs.subscribe((result) => {
       notifyManager.batchCalls(() => {
-        const query = observer().getCurrentQuery()
+        const query = obs.getCurrentQuery()
         const unwrappedResult = hydratableObserverResult(query, result)
 
         if (result.data !== undefined && unwrappedResult.isError) {
           reject(unwrappedResult.error)
           unsubscribeIfQueued()
         } else {
-          resolve(unwrappedResult)
+          resolveFrom(obs, resolve, unwrappedResult)
           unsubscribeIfQueued()
         }
       })()
@@ -175,9 +189,10 @@ export function useBaseQuery<
     }
   }
 
-  const createClientSubscriber = () => {
-    const obs = observer()
+  const createClientSubscriber = (obs: Obs) => {
     return obs.subscribe((result) => {
+      // `observerResult` must only ever hold results of the current observer
+      if (obs !== observer()) return
       observerResult = result
       queueMicrotask(() => {
         if (unsubscribe) {
@@ -210,6 +225,8 @@ export function useBaseQuery<
         if (typeof v === 'function') {
           v = v(unwrapped)
         }
+        const source = v && resultSources.get(v)
+        if (source && source !== observer()) return
         // Hydration data exists on first load after SSR,
         // and should be removed from the observer result
         if (v?.hydrationData) {
@@ -240,9 +257,9 @@ export function useBaseQuery<
       return new Promise((resolve, reject) => {
         resolver = resolve
         if (isServer) {
-          unsubscribe = createServerSubscriber(resolve, reject)
+          unsubscribe = createServerSubscriber(obs, resolve, reject)
         } else if (!unsubscribe && !isRestoring()) {
-          unsubscribe = createClientSubscriber()
+          unsubscribe = createClientSubscriber(obs)
         }
         obs.updateResult()
 
@@ -260,7 +277,9 @@ export function useBaseQuery<
         }
         if (!observerResult.isLoading) {
           resolver = null
-          return resolve(
+          return resolveFrom(
+            obs,
+            resolve,
             hydratableObserverResult(obs.getCurrentQuery(), observerResult),
           )
         }
@@ -305,40 +324,12 @@ export function useBaseQuery<
         }
         // Setting the options as an immutable object to prevent
         // wonky behavior with observer subscriptions
-        observer().setOptions(newOptions)
-        setStateWithReconciliation(observer().getOptimisticResult(newOptions))
-        unsubscribe = createClientSubscriber()
+        const obs = observer()
+        obs.setOptions(newOptions)
+        setStateWithReconciliation(obs.getOptimisticResult(newOptions))
+        unsubscribe = createClientSubscriber(obs)
       },
     },
-  )
-
-  createComputed(
-    on(
-      client,
-      (c) => {
-        if (unsubscribe) {
-          unsubscribe()
-        }
-        const newObserver = new Observer(c, defaultedOptions())
-        unsubscribe = createClientSubscriber()
-        setObserver(newObserver)
-      },
-      {
-        defer: true,
-      },
-    ),
-  )
-
-  createComputed(
-    on(
-      isRestoring,
-      (restoring) => {
-        if (!restoring && !isServer) {
-          refetch()
-        }
-      },
-      { defer: true },
-    ),
   )
 
   onCleanup(() => {
@@ -356,12 +347,33 @@ export function useBaseQuery<
     }
   })
 
+  // Client, options and restoring changes (`defaultedOptions` tracks
+  // `isRestoring`) are handled in one computation, so the resource never
+  // reloads from a previous client's observer or with outdated options
   createComputed(
     on(
-      [observer, defaultedOptions],
-      ([obs, opts]) => {
-        obs.setOptions(opts)
-        setStateWithReconciliation(obs.getOptimisticResult(opts))
+      [client, defaultedOptions],
+      ([c, opts]) => {
+        if (c !== observerClient) {
+          observerClient = c
+          if (unsubscribe) {
+            unsubscribe()
+            unsubscribe = null
+          }
+          const obs = new Observer(c, opts)
+          setObserver(obs)
+          setStateWithReconciliation(obs.getOptimisticResult(opts))
+          // As on mount, `observerResult` follows the store until the new
+          // observer notifies, so nothing from the previous observer remains
+          observerResult = unwrap(state)
+          if (!isRestoring()) {
+            unsubscribe = createClientSubscriber(obs)
+          }
+        } else {
+          const obs = observer()
+          obs.setOptions(opts)
+          setStateWithReconciliation(obs.getOptimisticResult(opts))
+        }
         refetch()
       },
       { defer: true },
