@@ -7,7 +7,7 @@ title: getDefaultQueryClient
 function getDefaultQueryClient(): QueryClient | undefined;
 ```
 
-Defined in: [packages/lit-query/src/context.ts:72](https://github.com/TanStack/query/blob/main/packages/lit-query/src/context.ts#L72)
+Defined in: [packages/lit-query/src/context.ts:77](https://github.com/TanStack/query/blob/main/packages/lit-query/src/context.ts#L77)
 
 Returns the registered default `QueryClient`, if exactly one default client is
 available.
