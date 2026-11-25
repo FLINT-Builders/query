@@ -7,7 +7,13 @@ import {
 } from 'solid-js'
 import { fireEvent, render } from '@solidjs/testing-library'
 import { queryKey, sleep } from '@tanstack/query-test-utils'
-import { MutationCache, QueryCache, QueryClient, useMutation } from '..'
+import {
+  MutationCache,
+  QueryCache,
+  QueryClient,
+  QueryClientProvider,
+  useMutation,
+} from '..'
 import {
   mockOnlineManagerIsOnline,
   renderWithClient,
@@ -1842,4 +1848,320 @@ describe('useMutation', () => {
 
     expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true)
   })
+
+  it('builds the first mutation on the client that is current when mutate runs', async () => {
+    const accountA = new QueryClient()
+    const accountB = new QueryClient()
+    const [client, setClient] = createSignal(accountA)
+    const seenClients: Array<QueryClient> = []
+
+    function Page() {
+      const mutation = useMutation(
+        () => ({
+          mutationKey: ['save-profile'],
+          mutationFn: (variables: string, context: { client: QueryClient }) => {
+            seenClients.push(context.client)
+            return sleep(10).then(() => variables)
+          },
+        }),
+        client,
+      )
+
+      return (
+        <div>
+          <div data-testid="state">{mutationState(mutation)}</div>
+          <button onClick={() => mutation.mutate('draft-b')}>mutate</button>
+        </div>
+      )
+    }
+
+    const rendered = render(() => <Page />)
+
+    setClient(accountB)
+    setClient(accountA)
+    setClient(accountB)
+
+    expect(rendered.getByTestId('state').textContent).toBe('idle||')
+
+    fireEvent.click(rendered.getByRole('button', { name: 'mutate' }))
+    await vi.advanceTimersByTimeAsync(10)
+
+    expect(rendered.getByTestId('state').textContent).toBe(
+      'success|draft-b|draft-b',
+    )
+    expect(variablesIn(accountB)).toEqual(['draft-b'])
+    expect(variablesIn(accountA)).toEqual([])
+    expect(seenClients).toEqual([accountB])
+
+    accountA.clear()
+    accountB.clear()
+  })
+
+  it('drops the previous client result and stores the next mutate() on the new client', async () => {
+    const accountA = new QueryClient()
+    const accountB = new QueryClient()
+    const [client, setClient] = createSignal(accountA)
+    const [label, setLabel] = createSignal('draft-a')
+    const seenClients: Array<QueryClient> = []
+
+    function Page() {
+      const mutation = useMutation(
+        () => ({
+          mutationKey: ['save-profile'],
+          mutationFn: (variables: string, context: { client: QueryClient }) => {
+            seenClients.push(context.client)
+            return sleep(10).then(() => variables)
+          },
+        }),
+        client,
+      )
+
+      return (
+        <div>
+          <div data-testid="state">{mutationState(mutation)}</div>
+          <button onClick={() => mutation.mutate(label())}>mutate</button>
+        </div>
+      )
+    }
+
+    const rendered = render(() => <Page />)
+
+    fireEvent.click(rendered.getByRole('button', { name: 'mutate' }))
+    await vi.advanceTimersByTimeAsync(10)
+
+    expect(rendered.getByTestId('state').textContent).toBe(
+      'success|draft-a|draft-a',
+    )
+    expect(variablesIn(accountA)).toEqual(['draft-a'])
+    expect(seenClients).toEqual([accountA])
+
+    setClient(accountB)
+    setLabel('draft-b')
+
+    expect(rendered.getByTestId('state').textContent).toBe('idle||')
+    expect(variablesIn(accountB)).toEqual([])
+
+    fireEvent.click(rendered.getByRole('button', { name: 'mutate' }))
+    await vi.advanceTimersByTimeAsync(10)
+
+    expect(rendered.getByTestId('state').textContent).toBe(
+      'success|draft-b|draft-b',
+    )
+    expect(variablesIn(accountB)).toEqual(['draft-b'])
+    expect(variablesIn(accountA)).toEqual(['draft-a'])
+    expect(seenClients).toEqual([accountA, accountB])
+
+    accountA.clear()
+    accountB.clear()
+  })
+
+  it('stores mutateAsync on the client that is current when it is called', async () => {
+    const accountA = new QueryClient()
+    const accountB = new QueryClient()
+    const [client, setClient] = createSignal(accountA)
+    const seenClients: Array<QueryClient> = []
+    let settled = ''
+
+    function Page() {
+      const mutation = useMutation(
+        () => ({
+          mutationKey: ['save-profile'],
+          mutationFn: (variables: string, context: { client: QueryClient }) => {
+            seenClients.push(context.client)
+            return sleep(10).then(() => variables)
+          },
+        }),
+        client,
+      )
+
+      return (
+        <div>
+          <div data-testid="state">{mutationState(mutation)}</div>
+          <button
+            onClick={() => {
+              void mutation.mutateAsync('draft-b').then((data) => {
+                settled = data
+              })
+            }}
+          >
+            mutate
+          </button>
+        </div>
+      )
+    }
+
+    const rendered = render(() => <Page />)
+
+    setClient(accountB)
+    fireEvent.click(rendered.getByRole('button', { name: 'mutate' }))
+    await vi.advanceTimersByTimeAsync(10)
+
+    expect(settled).toBe('draft-b')
+    expect(rendered.getByTestId('state').textContent).toBe(
+      'success|draft-b|draft-b',
+    )
+    expect(variablesIn(accountB)).toEqual(['draft-b'])
+    expect(variablesIn(accountA)).toEqual([])
+    expect(seenClients).toEqual([accountB])
+
+    accountA.clear()
+    accountB.clear()
+  })
+
+  it('stops showing an in-flight mutation after the client changes, including when that mutation later settles', async () => {
+    const accountA = new QueryClient()
+    const accountB = new QueryClient()
+    const [client, setClient] = createSignal(accountA)
+
+    function Page() {
+      const mutation = useMutation(
+        () => ({
+          mutationKey: ['save-profile'],
+          mutationFn: (variables: string) => sleep(50).then(() => variables),
+        }),
+        client,
+      )
+
+      return (
+        <div>
+          <div data-testid="state">{mutationState(mutation)}</div>
+          <button onClick={() => mutation.mutate('draft-a')}>mutate</button>
+        </div>
+      )
+    }
+
+    const rendered = render(() => <Page />)
+
+    fireEvent.click(rendered.getByRole('button', { name: 'mutate' }))
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(rendered.getByTestId('state').textContent).toBe('pending||draft-a')
+    expect(variablesIn(accountA)).toEqual(['draft-a'])
+
+    setClient(accountB)
+
+    expect(rendered.getByTestId('state').textContent).toBe('idle||')
+
+    await vi.advanceTimersByTimeAsync(50)
+
+    expect(rendered.getByTestId('state').textContent).toBe('idle||')
+    expect(variablesIn(accountA)).toEqual(['draft-a'])
+    expect(accountA.getMutationCache().getAll()[0]?.state.status).toBe(
+      'success',
+    )
+    expect(accountA.getMutationCache().getAll()[0]?.state.data).toBe('draft-a')
+    expect(variablesIn(accountB)).toEqual([])
+
+    accountA.clear()
+    accountB.clear()
+  })
+
+  it('follows a QueryClientProvider client swap without remounting the mutation', async () => {
+    const accountA = new QueryClient()
+    const accountB = new QueryClient()
+    const [client, setClient] = createSignal(accountA)
+    const [label, setLabel] = createSignal('draft-a')
+    const seenClients: Array<QueryClient> = []
+
+    function Page() {
+      const mutation = useMutation(() => ({
+        mutationKey: ['save-profile'],
+        mutationFn: (variables: string, context: { client: QueryClient }) => {
+          seenClients.push(context.client)
+          return sleep(10).then(() => variables)
+        },
+      }))
+
+      return (
+        <div>
+          <div data-testid="state">{mutationState(mutation)}</div>
+          <button onClick={() => mutation.mutate(label())}>mutate</button>
+        </div>
+      )
+    }
+
+    const rendered = render(() => (
+      <QueryClientProvider client={client()}>
+        <Page />
+      </QueryClientProvider>
+    ))
+
+    fireEvent.click(rendered.getByRole('button', { name: 'mutate' }))
+    await vi.advanceTimersByTimeAsync(10)
+
+    expect(rendered.getByTestId('state').textContent).toBe(
+      'success|draft-a|draft-a',
+    )
+    expect(variablesIn(accountA)).toEqual(['draft-a'])
+
+    setClient(accountB)
+    setLabel('draft-b')
+
+    expect(rendered.getByTestId('state').textContent).toBe('idle||')
+
+    fireEvent.click(rendered.getByRole('button', { name: 'mutate' }))
+    await vi.advanceTimersByTimeAsync(10)
+
+    expect(rendered.getByTestId('state').textContent).toBe(
+      'success|draft-b|draft-b',
+    )
+    expect(variablesIn(accountB)).toEqual(['draft-b'])
+    expect(variablesIn(accountA)).toEqual(['draft-a'])
+    expect(seenClients).toEqual([accountA, accountB])
+
+    accountA.clear()
+    accountB.clear()
+  })
+
+  it('writes through to the new client when updated options already closed over that client', async () => {
+    const accountA = new QueryClient()
+    const accountB = new QueryClient()
+    const [client, setClient] = createSignal(accountA)
+    const onSuccess = vi.fn()
+
+    function Page() {
+      const mutation = useMutation(
+        () => ({
+          mutationKey: ['save-profile'],
+          meta: { account: client() === accountB ? 'b' : 'a' },
+          mutationFn: (variables: string) => sleep(10).then(() => variables),
+          onSuccess,
+        }),
+        client,
+      )
+
+      return <button onClick={() => mutation.mutate('draft-b')}>mutate</button>
+    }
+
+    const rendered = render(() => <Page />)
+
+    setClient(accountB)
+    fireEvent.click(rendered.getByRole('button', { name: 'mutate' }))
+    await vi.advanceTimersByTimeAsync(10)
+
+    expect(variablesIn(accountB)).toEqual(['draft-b'])
+    expect(variablesIn(accountA)).toEqual([])
+    expect(onSuccess).toHaveBeenCalledTimes(1)
+    const context = onSuccess.mock.calls[0]?.[3]
+    expect(context.client).toBe(accountB)
+    expect(context.meta).toEqual({ account: 'b' })
+
+    accountA.clear()
+    accountB.clear()
+  })
 })
+
+function variablesIn(client: QueryClient): Array<unknown> {
+  return client
+    .getMutationCache()
+    .getAll()
+    .map((mutation) => mutation.state.variables)
+}
+
+function mutationState(mutation: {
+  status: string
+  data: unknown
+  variables: unknown
+}): string {
+  return `${mutation.status}|${mutation.data ?? ''}|${mutation.variables ?? ''}`
+}

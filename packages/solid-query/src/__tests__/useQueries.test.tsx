@@ -213,4 +213,57 @@ describe('useQueries', () => {
     expect(queryFn1).toHaveBeenCalledTimes(0)
     expect(queryFn2).toHaveBeenCalledTimes(0)
   })
+
+  it('should refetch on the new client when the queryClient accessor changes', async () => {
+    const key = queryKey()
+    const accountA = new QueryClient()
+    const accountB = new QueryClient()
+    const [client, setClient] = createSignal(accountA)
+    const queryFn = vi.fn((_context: { client: QueryClient }) =>
+      sleep(10).then(() => 'data'),
+    )
+
+    function Page() {
+      const results = useQueries(
+        () => ({
+          queries: [
+            {
+              queryKey: key,
+              queryFn,
+            },
+          ],
+        }),
+        client,
+      )
+
+      return <div>data: {results[0].data ?? 'undefined'}</div>
+    }
+
+    const rendered = render(() => <Page />)
+
+    await vi.advanceTimersByTimeAsync(10)
+
+    expect(rendered.getByText('data: data')).toBeInTheDocument()
+    expect(accountA.getQueryCache().find({ queryKey: key })?.state.data).toBe(
+      'data',
+    )
+    expect(queryFn).toHaveBeenCalledTimes(1)
+    expect(queryFn.mock.calls[0]?.[0]?.client).toBe(accountA)
+
+    setClient(accountB)
+    await vi.advanceTimersByTimeAsync(10)
+
+    expect(rendered.getByText('data: data')).toBeInTheDocument()
+    expect(accountB.getQueryCache().find({ queryKey: key })?.state.data).toBe(
+      'data',
+    )
+    expect(queryFn).toHaveBeenCalledTimes(2)
+    expect(queryFn.mock.calls[1]?.[0]?.client).toBe(accountB)
+    expect(accountA.getQueryCache().find({ queryKey: key })?.state.data).toBe(
+      'data',
+    )
+
+    accountA.clear()
+    accountB.clear()
+  })
 })
