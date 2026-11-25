@@ -160,42 +160,33 @@ export function useBaseQuery<
   const suspense = () => {
     return new Promise<QueryObserverResult<TData, TError>>(
       (resolve, reject) => {
-        let stopWatch = () => {
-          // noop
+        // fix #6133
+        observer.setOptions(defaultedOptions.value)
+        const optimisticResult = observer.getOptimisticResult(
+          defaultedOptions.value,
+        )
+
+        // A disabled query never fetches, so waiting on it would leave the
+        // promise (and anything awaiting it, such as a server render) pending.
+        if (!optimisticResult.isEnabled || !optimisticResult.isStale) {
+          resolve(optimisticResult)
+          return
         }
-        const run = () => {
-          if (defaultedOptions.value.enabled !== false) {
-            // fix #6133
-            observer.setOptions(defaultedOptions.value)
-            const optimisticResult = observer.getOptimisticResult(
-              defaultedOptions.value,
-            )
-            if (optimisticResult.isStale) {
-              stopWatch()
-              observer
-                .fetchOptimistic(defaultedOptions.value)
-                .then(resolve, (error: TError) => {
-                  if (
-                    shouldThrowError(defaultedOptions.value.throwOnError, [
-                      error,
-                      observer.getCurrentQuery(),
-                    ])
-                  ) {
-                    reject(error)
-                  } else {
-                    resolve(observer.getCurrentResult())
-                  }
-                })
+
+        observer
+          .fetchOptimistic(defaultedOptions.value)
+          .then(resolve, (error: TError) => {
+            if (
+              shouldThrowError(defaultedOptions.value.throwOnError, [
+                error,
+                observer.getCurrentQuery(),
+              ])
+            ) {
+              reject(error)
             } else {
-              stopWatch()
-              resolve(optimisticResult)
+              resolve(observer.getCurrentResult())
             }
-          }
-        }
-
-        run()
-
-        stopWatch = watch(defaultedOptions, run)
+          })
       },
     )
   }
