@@ -6,11 +6,12 @@ import {
   readonly,
   shallowReactive,
   shallowReadonly,
+  shallowRef,
   toRefs,
   watch,
 } from 'vue-demi'
-import { shouldThrowError } from '@tanstack/query-core'
-import { useQueryClient } from './useQueryClient'
+import { noop, shouldThrowError } from '@tanstack/query-core'
+import { useQueryClientGetter } from './useQueryClient'
 import { cloneDeepUnref, updateState } from './utils'
 import type { Ref } from 'vue-demi'
 import type {
@@ -87,9 +88,14 @@ export function useBaseQuery<
     }
   }
 
-  const client = queryClient || useQueryClient()
+  const getClient = queryClient ? () => queryClient : useQueryClientGetter()
+  // Bumped to resolve the client again when it may have changed without an options change.
+  const clientCheck = shallowRef(0)
 
-  const defaultedOptions = computed(() => {
+  const boundOptions = computed(() => {
+    void clientCheck.value
+    const client = getClient()
+
     let resolvedOptions = options
     if (typeof resolvedOptions === 'function') {
       resolvedOptions = resolvedOptions()
@@ -112,36 +118,64 @@ export function useBaseQuery<
       ? 'isRestoring'
       : 'optimistic'
 
-    return defaulted
+    return { client, options: defaulted }
   })
+  const defaultedOptions = computed(() => boundOptions.value.options)
 
-  const observer = new Observer(client, defaultedOptions.value)
+  let client = boundOptions.value.client
+  let observer = new Observer(client, defaultedOptions.value)
   // @ts-expect-error
   const state = defaultedOptions.value.shallow
     ? shallowReactive(observer.getCurrentResult())
     : reactive(observer.getCurrentResult())
 
-  let unsubscribe = () => {
-    // noop
+  let unsubscribe: () => void = noop
+  let stopRestoringWatch: () => void = noop
+
+  const subscribe = () => {
+    if (client.isRestoring) {
+      stopRestoringWatch = watch(
+        client.isRestoring,
+        (isRestoring) => {
+          if (!isRestoring) {
+            unsubscribe()
+            unsubscribe = observer.subscribe((result) => {
+              updateState(state, result)
+            })
+          }
+        },
+        { immediate: true },
+      )
+    }
   }
 
-  if (client.isRestoring) {
-    watch(
-      client.isRestoring,
-      (isRestoring) => {
-        if (!isRestoring) {
-          unsubscribe()
-          unsubscribe = observer.subscribe((result) => {
-            updateState(state, result)
-          })
-        }
-      },
-      { immediate: true },
-    )
+  subscribe()
+
+  const syncObserver = () => {
+    const bound = boundOptions.value
+    if (bound.client === client) {
+      observer.setOptions(bound.options)
+      return
+    }
+    unsubscribe()
+    unsubscribe = noop
+    stopRestoringWatch()
+    stopRestoringWatch = noop
+    client = bound.client
+    observer = new Observer(client, bound.options)
+    subscribe()
+  }
+
+  const invalidateClient = () => {
+    if (getClient() === client) {
+      return false
+    }
+    clientCheck.value++
+    return true
   }
 
   const updater = () => {
-    observer.setOptions(defaultedOptions.value)
+    syncObserver()
     updateState(state, observer.getCurrentResult())
   }
 
@@ -149,15 +183,18 @@ export function useBaseQuery<
 
   onScopeDispose(() => {
     unsubscribe()
+    stopRestoringWatch()
   })
 
   // fix #5910
   const refetch = (...args: Parameters<(typeof state)['refetch']>) => {
+    invalidateClient()
     updater()
     return state.refetch(...args)
   }
 
   const suspense = () => {
+    invalidateClient()
     return new Promise<QueryObserverResult<TData, TError>>(
       (resolve, reject) => {
         let stopWatch = () => {
@@ -166,24 +203,25 @@ export function useBaseQuery<
         const run = () => {
           if (defaultedOptions.value.enabled !== false) {
             // fix #6133
-            observer.setOptions(defaultedOptions.value)
-            const optimisticResult = observer.getOptimisticResult(
+            syncObserver()
+            const currentObserver = observer
+            const optimisticResult = currentObserver.getOptimisticResult(
               defaultedOptions.value,
             )
             if (optimisticResult.isStale) {
               stopWatch()
-              observer
+              currentObserver
                 .fetchOptimistic(defaultedOptions.value)
                 .then(resolve, (error: TError) => {
                   if (
                     shouldThrowError(defaultedOptions.value.throwOnError, [
                       error,
-                      observer.getCurrentQuery(),
+                      currentObserver.getCurrentQuery(),
                     ])
                   ) {
                     reject(error)
                   } else {
-                    resolve(observer.getCurrentResult())
+                    resolve(currentObserver.getCurrentResult())
                   }
                 })
             } else {
@@ -225,7 +263,12 @@ export function useBaseQuery<
   const object: any = toRefs(readonlyState)
   for (const key in state) {
     if (typeof state[key as keyof typeof state] === 'function') {
-      object[key] = state[key as keyof typeof state]
+      object[key] = (...args: Array<unknown>) => {
+        if (invalidateClient()) {
+          updater()
+        }
+        return (state as any)[key](...args)
+      }
     }
   }
 

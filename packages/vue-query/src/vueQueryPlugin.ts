@@ -2,7 +2,7 @@ import { isVue2 } from 'vue-demi'
 import { environmentManager } from '@tanstack/query-core'
 
 import { QueryClient } from './queryClient'
-import { getClientKey } from './utils'
+import { VUE_QUERY_APP, getClientKey } from './utils'
 import { setupDevtools } from './devtools/devtools'
 import type { QueryClientConfig } from './types'
 
@@ -144,6 +144,7 @@ export const VueQueryPlugin = {
       })
     } else {
       app.provide(clientKey, client)
+      app.provide(VUE_QUERY_APP, app)
 
       if (process.env.NODE_ENV === 'development') {
         if (options.enableDevtoolsV6Plugin) {

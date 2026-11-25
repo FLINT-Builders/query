@@ -8,3 +8,8 @@ const queryClient = new QueryClient({
 })
 
 export const useQueryClient = vi.fn(() => queryClient)
+
+export const useQueryClientGetter = vi.fn(() => {
+  const client = useQueryClient()
+  return () => client
+})

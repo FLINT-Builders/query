@@ -6,12 +6,13 @@ import {
   readonly,
   shallowReactive,
   shallowReadonly,
+  shallowRef,
   toRefs,
   watch,
 } from 'vue-demi'
 import { MutationObserver, shouldThrowError } from '@tanstack/query-core'
 import { cloneDeepUnref, updateState } from './utils'
-import { useQueryClient } from './useQueryClient'
+import { useQueryClientGetter } from './useQueryClient'
 import type { ToRefs } from 'vue-demi'
 import type {
   DefaultError,
@@ -245,33 +246,74 @@ export function useMutation<
     }
   }
 
-  const client = queryClient || useQueryClient()
-  const defaultedOptions = computed(() => {
+  const getClient = queryClient ? () => queryClient : useQueryClientGetter()
+  // Bumped to resolve the client again when it may have changed without an options change.
+  const clientCheck = shallowRef(0)
+  const boundOptions = computed(() => {
+    void clientCheck.value
+    const client = getClient()
     const resolvedOptions = typeof options === 'function' ? options() : options
-    return client.defaultMutationOptions(cloneDeepUnref(resolvedOptions))
+    return {
+      client,
+      options: client.defaultMutationOptions(cloneDeepUnref(resolvedOptions)),
+    }
   })
-  const observer = new MutationObserver(client, defaultedOptions.value)
+  const defaultedOptions = computed(() => boundOptions.value.options)
+  let client = boundOptions.value.client
+  let observer = new MutationObserver(client, defaultedOptions.value)
   const state = defaultedOptions.value.shallow
     ? shallowReactive(observer.getCurrentResult())
     : reactive(observer.getCurrentResult())
 
-  const unsubscribe = observer.subscribe((result) => {
-    updateState(state, result)
-  })
+  const subscribe = () =>
+    observer.subscribe((result) => {
+      updateState(state, result)
+    })
+
+  let unsubscribe = subscribe()
+
+  const syncObserver = () => {
+    const bound = boundOptions.value
+    if (bound.client === client) {
+      observer.setOptions(bound.options)
+      return
+    }
+    unsubscribe()
+    client = bound.client
+    observer = new MutationObserver(client, bound.options)
+    unsubscribe = subscribe()
+    updateState(state, observer.getCurrentResult())
+  }
+
+  const refreshClient = () => {
+    if (getClient() !== client) {
+      clientCheck.value++
+      syncObserver()
+    }
+  }
 
   const mutate = (
     ...args: Parameters<
       MutateFunction<TData, TError, TVariables, TOnMutateResult>
     >
   ) => {
+    refreshClient()
     observer.mutate(args[0] as TVariables, args[1]).catch(() => {
       // This is intentional
     })
   }
 
-  watch(defaultedOptions, () => {
-    observer.setOptions(defaultedOptions.value)
-  })
+  const mutateAsync: MutateFunction<
+    TData,
+    TError,
+    TVariables,
+    TOnMutateResult
+  > = (...args) => {
+    refreshClient()
+    return observer.mutate(args[0] as TVariables, args[1])
+  }
+
+  watch(defaultedOptions, syncObserver)
 
   onScopeDispose(() => {
     unsubscribe()
@@ -300,7 +342,7 @@ export function useMutation<
   return {
     ...resultRefs,
     mutate,
-    mutateAsync: state.mutate,
-    reset: state.reset,
+    mutateAsync,
+    reset: () => observer.reset(),
   }
 }

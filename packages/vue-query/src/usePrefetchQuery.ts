@@ -1,6 +1,6 @@
 import { getCurrentScope, unref, watchEffect } from 'vue-demi'
 import { noop } from '@tanstack/query-core'
-import { useQueryClient } from './useQueryClient'
+import { useQueryClientGetter } from './useQueryClient'
 import { cloneDeepUnref } from './utils'
 import type {
   DefaultError,
@@ -111,9 +111,10 @@ export function usePrefetchQuery<
     }
   }
 
-  const client = queryClient || useQueryClient()
+  const getClient = queryClient ? () => queryClient : useQueryClientGetter()
 
   watchEffect(() => {
+    const client = getClient()
     const resolvedOptions = isGetter(options) ? options() : unref(options)
     const clonedOptions: UsePrefetchQueryOptions<
       TQueryFnData,
