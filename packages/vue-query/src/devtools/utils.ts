@@ -93,3 +93,14 @@ export const sortFns: Record<string, SortFn> = {
   'Query Hash': queryHashSort,
   'Last Updated': dateSort,
 }
+
+/**
+ * Plugin settings are restored from web storage, so only own keys of
+ * `sortFns` are accepted; anything else, including inherited keys such as
+ * `constructor`, falls back to the default sort.
+ */
+export const getSortFn = (name: unknown): SortFn =>
+  typeof name === 'string' &&
+  Object.prototype.hasOwnProperty.call(sortFns, name)
+    ? sortFns[name]!
+    : statusAndDateSort
