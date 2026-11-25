@@ -44,8 +44,12 @@ export const injectDevtoolsPanel: InjectDevtoolsPanel = (
 
     const queryOptions = computed(injectDevtoolsPanelFn)
     let devtools: TanstackQueryDevtoolsPanel | null = null
+    // Identifies the only devtools load allowed to mount a panel. Clearing it
+    // makes any in-flight load discard its result.
+    let pendingLoad: object | null = null
 
     const destroy = () => {
+      pendingLoad = null
       devtools?.unmount()
       devtools = null
     }
@@ -59,8 +63,6 @@ export const injectDevtoolsPanel: InjectDevtoolsPanel = (
       const {
         client = injectedClient,
         errorTypes = [],
-        styleNonce,
-        shadowDOMTarget,
         onClose,
         hostElement,
       } = queryOptions()
@@ -68,24 +70,44 @@ export const injectDevtoolsPanel: InjectDevtoolsPanel = (
       untracked(() => {
         if (!client) throw new Error('No QueryClient found')
         if (!devtools && hostElement) {
+          if (pendingLoad) return
+          const load = {}
+          pendingLoad = load
           import('@tanstack/query-devtools')
             .then((queryDevtools) => {
+              if (pendingLoad !== load) return
+              pendingLoad = null
+
+              // Options may have changed while the module was loading, so the
+              // panel is created from the current ones rather than those that
+              // started the load.
+              const {
+                client: currentClient = injectedClient,
+                errorTypes: currentErrorTypes = [],
+                styleNonce,
+                shadowDOMTarget,
+                onClose: currentOnClose,
+                hostElement: currentHostElement,
+              } = untracked(queryOptions)
+              if (!currentClient || !currentHostElement) return
+
               devtools = new queryDevtools.TanstackQueryDevtoolsPanel({
-                client,
+                client: currentClient,
                 queryFlavor: 'Angular Query',
                 version: '5',
                 buttonPosition: 'bottom-left',
                 position: 'bottom',
                 initialIsOpen: true,
-                errorTypes,
+                errorTypes: currentErrorTypes,
                 styleNonce,
                 shadowDOMTarget,
-                onClose,
+                onClose: currentOnClose,
                 onlineManager,
               })
-              devtools.mount(hostElement.nativeElement)
+              devtools.mount(currentHostElement.nativeElement)
             })
             .catch((error) => {
+              if (pendingLoad === load) pendingLoad = null
               console.error(
                 'Install @tanstack/query-devtools or reinstall without --omit=optional.',
                 error,
@@ -95,7 +117,7 @@ export const injectDevtoolsPanel: InjectDevtoolsPanel = (
           devtools.setClient(client)
           devtools.setErrorTypes(errorTypes)
           onClose && devtools.setOnClose(onClose)
-        } else if (devtools && !hostElement) {
+        } else if (!hostElement) {
           destroy()
         }
       })
