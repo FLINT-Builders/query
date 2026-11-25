@@ -235,11 +235,13 @@ export class MutationCache extends Subscribable<MutationCacheListener> {
    */
   clear(): void {
     notifyManager.batch(() => {
-      this.#mutations.forEach((mutation) => {
-        this.notify({ type: 'removed', mutation })
-      })
+      const mutations = Array.from(this.#mutations)
+      // Listeners read the cache when notified, so it has to be empty by then.
       this.#mutations.clear()
       this.#scopes.clear()
+      mutations.forEach((mutation) => {
+        this.notify({ type: 'removed', mutation })
+      })
     })
   }
 

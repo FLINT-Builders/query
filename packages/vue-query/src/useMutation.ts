@@ -9,14 +9,15 @@ import {
   toRefs,
   watch,
 } from 'vue-demi'
-import { MutationObserver, shouldThrowError } from '@tanstack/query-core'
+import { MutationObserver, noop, shouldThrowError } from '@tanstack/query-core'
 import { cloneDeepUnref, updateState } from './utils'
-import { useQueryClient } from './useQueryClient'
+import { useQueryClientRef } from './useQueryClientRef'
 import type { ToRefs } from 'vue-demi'
 import type {
   DefaultError,
   DistributiveOmit,
   MutateFunction,
+  Mutation,
   MutationObserverResult,
 } from '@tanstack/query-core'
 import type { MaybeRefDeep, MutationOptions } from './types'
@@ -245,26 +246,97 @@ export function useMutation<
     }
   }
 
-  const client = queryClient || useQueryClient()
+  const client = useQueryClientRef(queryClient)
   const defaultedOptions = computed(() => {
     const resolvedOptions = typeof options === 'function' ? options() : options
-    return client.defaultMutationOptions(cloneDeepUnref(resolvedOptions))
+    return client.value.defaultMutationOptions(cloneDeepUnref(resolvedOptions))
   })
-  const observer = new MutationObserver(client, defaultedOptions.value)
+  let observerClient = client.value
+  let observer = new MutationObserver(observerClient, defaultedOptions.value)
+  let current:
+    | {
+        mutation: Mutation<TData, TError, TVariables, TOnMutateResult>
+        settled: Promise<unknown>
+      }
+    | undefined
   const state = defaultedOptions.value.shallow
     ? shallowReactive(observer.getCurrentResult())
     : reactive(observer.getCurrentResult())
 
-  const unsubscribe = observer.subscribe((result) => {
-    updateState(state, result)
-  })
+  const subscribe = () =>
+    observer.subscribe((result) => {
+      updateState(state, result)
+    })
+
+  let unsubscribe = subscribe()
+
+  watch(
+    client,
+    (newClient) => {
+      unsubscribe()
+      if (current) {
+        // The mutation whose state this composable showed must not stay behind in the
+        // previous client. A pending one is removed once it settles, since the cache
+        // still drives its execution and scope queue.
+        const { mutation, settled } = current
+        const previousCache = observerClient.getMutationCache()
+        const remove = () => previousCache.remove(mutation)
+        if (mutation.state.status === 'pending') {
+          void settled.then(remove)
+        } else {
+          remove()
+        }
+        current = undefined
+      }
+      observerClient = newClient
+      observer = new MutationObserver(newClient, defaultedOptions.value)
+      updateState(state, observer.getCurrentResult())
+      unsubscribe = subscribe()
+    },
+    { flush: 'sync' },
+  )
+
+  const mutateAsync: MutateFunction<
+    TData,
+    TError,
+    TVariables,
+    TOnMutateResult
+  > = (...args) => {
+    const boundObserver = observer
+    let built: Mutation<TData, TError, TVariables, TOnMutateResult> | undefined
+    const stopTracking = observerClient
+      .getMutationCache()
+      .subscribe((event) => {
+        if (
+          event.type === 'observerAdded' &&
+          event.observer === boundObserver
+        ) {
+          built = event.mutation as Mutation<
+            TData,
+            TError,
+            TVariables,
+            TOnMutateResult
+          >
+        }
+      })
+    let promise: Promise<TData>
+    try {
+      promise = boundObserver.mutate(args[0] as TVariables, args[1])
+    } finally {
+      stopTracking()
+    }
+    if (built && boundObserver === observer) {
+      current = { mutation: built, settled: promise.catch(noop) }
+    }
+    return promise
+  }
 
   const mutate = (
     ...args: Parameters<
       MutateFunction<TData, TError, TVariables, TOnMutateResult>
     >
   ) => {
-    observer.mutate(args[0] as TVariables, args[1]).catch(() => {
+    mutateAsync(args[0] as TVariables, args[1]).catch(() => {
       // This is intentional
     })
   }
@@ -300,7 +372,7 @@ export function useMutation<
   return {
     ...resultRefs,
     mutate,
-    mutateAsync: state.mutate,
-    reset: state.reset,
+    mutateAsync,
+    reset: () => observer.reset(),
   }
 }

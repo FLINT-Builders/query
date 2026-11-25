@@ -1,8 +1,8 @@
-import { isVue2 } from 'vue-demi'
+import { isVue2, shallowReadonly, shallowRef } from 'vue-demi'
 import { environmentManager } from '@tanstack/query-core'
 
 import { QueryClient } from './queryClient'
-import { getClientKey } from './utils'
+import { getClientKey, getClientRefKey } from './utils'
 import { setupDevtools } from './devtools/devtools'
 import type { QueryClientConfig } from './types'
 
@@ -106,8 +106,10 @@ export const VueQueryPlugin = {
       })
     }
 
+    const providedClient = shallowRef(client)
+
     const cleanup = () => {
-      client.unmount()
+      providedClient.value.unmount()
       persisterUnmount()
     }
 
@@ -144,6 +146,44 @@ export const VueQueryPlugin = {
       })
     } else {
       app.provide(clientKey, client)
+
+      const provides: Record<string, unknown> | undefined =
+        app._context?.provides
+      if (provides) {
+        // Composables bind observers and cache subscriptions to the client, so a client
+        // replaced later through `app.provide` has to be observable for them to rebind.
+        Object.defineProperty(provides, clientKey, {
+          configurable: true,
+          enumerable: true,
+          get: () => providedClient.value,
+          set(this: object, value: QueryClient) {
+            if (this !== provides) {
+              // A component providing its own client under the same key.
+              Object.defineProperty(this, clientKey, {
+                configurable: true,
+                enumerable: true,
+                writable: true,
+                value,
+              })
+              return
+            }
+
+            const previous = providedClient.value
+            if (value === previous) {
+              return
+            }
+            if (!environmentManager.isServer()) {
+              value.mount()
+              previous.unmount()
+            }
+            providedClient.value = value
+          },
+        })
+        app.provide(
+          getClientRefKey(options.queryClientKey),
+          shallowReadonly(providedClient),
+        )
+      }
 
       if (process.env.NODE_ENV === 'development') {
         if (options.enableDevtoolsV6Plugin) {

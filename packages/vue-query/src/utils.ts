@@ -10,6 +10,15 @@ export function getClientKey(key?: string) {
   return `${VUE_QUERY_CLIENT}${suffix}`
 }
 
+/**
+ * @internal Builds the injection key under which `VueQueryPlugin` provides a `ref` that tracks the
+ * `QueryClient` currently provided under {@link getClientKey}.
+ */
+export function getClientRefKey(key?: string) {
+  const suffix = key ? `:${key}` : ''
+  return `${VUE_QUERY_CLIENT}_REF${suffix}`
+}
+
 /** @internal Copies each property from `update` onto `state`, in place, for every key already on `state`. */
 export function updateState(
   state: Record<string, any>,

@@ -1,6 +1,6 @@
 import { getCurrentScope, unref, watchEffect } from 'vue-demi'
 import { noop } from '@tanstack/query-core'
-import { useQueryClient } from './useQueryClient'
+import { useQueryClientRef } from './useQueryClientRef'
 import { cloneDeepUnref } from './utils'
 import type {
   DefaultError,
@@ -119,9 +119,10 @@ export function usePrefetchInfiniteQuery<
     }
   }
 
-  const client = queryClient || useQueryClient()
+  const client = useQueryClientRef(queryClient)
 
   watchEffect(() => {
+    const boundClient = client.value
     const resolvedOptions = isGetter(options) ? options() : unref(options)
 
     const clonedOptions: UsePrefetchInfiniteQueryOptions<
@@ -132,8 +133,8 @@ export function usePrefetchInfiniteQuery<
       TPageParam
     > = cloneDeepUnref(resolvedOptions)
 
-    if (!client.getQueryState(clonedOptions.queryKey)) {
-      void client.infiniteQuery(clonedOptions).then(noop).catch(noop)
+    if (!boundClient.getQueryState(clonedOptions.queryKey)) {
+      void boundClient.infiniteQuery(clonedOptions).then(noop).catch(noop)
     }
   })
 }

@@ -10,7 +10,7 @@ import {
   watch,
 } from 'vue-demi'
 import { shouldThrowError } from '@tanstack/query-core'
-import { useQueryClient } from './useQueryClient'
+import { useQueryClientRef } from './useQueryClientRef'
 import { cloneDeepUnref, updateState } from './utils'
 import type { Ref } from 'vue-demi'
 import type {
@@ -87,7 +87,7 @@ export function useBaseQuery<
     }
   }
 
-  const client = queryClient || useQueryClient()
+  const client = useQueryClientRef(queryClient)
 
   const defaultedOptions = computed(() => {
     let resolvedOptions = options
@@ -106,16 +106,16 @@ export function useBaseQuery<
       TData,
       TQueryData,
       TQueryKey
-    > = client.defaultQueryOptions(clonedOptions)
+    > = client.value.defaultQueryOptions(clonedOptions)
 
-    defaulted._optimisticResults = client.isRestoring?.value
+    defaulted._optimisticResults = client.value.isRestoring?.value
       ? 'isRestoring'
       : 'optimistic'
 
     return defaulted
   })
 
-  const observer = new Observer(client, defaultedOptions.value)
+  let observer = new Observer(client.value, defaultedOptions.value)
   // @ts-expect-error
   const state = defaultedOptions.value.shallow
     ? shallowReactive(observer.getCurrentResult())
@@ -125,20 +125,38 @@ export function useBaseQuery<
     // noop
   }
 
-  if (client.isRestoring) {
-    watch(
-      client.isRestoring,
-      (isRestoring) => {
-        if (!isRestoring) {
-          unsubscribe()
-          unsubscribe = observer.subscribe((result) => {
-            updateState(state, result)
-          })
-        }
-      },
-      { immediate: true },
-    )
+  const subscribe = () => {
+    unsubscribe()
+    unsubscribe = observer.subscribe((result) => {
+      updateState(state, result)
+    })
   }
+
+  watch(
+    client,
+    (newClient) => {
+      unsubscribe()
+      unsubscribe = () => {
+        // noop
+      }
+      observer = new Observer(newClient, defaultedOptions.value)
+      updateState(state, observer.getCurrentResult())
+      if (newClient.isRestoring?.value === false) {
+        subscribe()
+      }
+    },
+    { flush: 'sync' },
+  )
+
+  watch(
+    () => client.value.isRestoring?.value,
+    (isRestoring) => {
+      if (isRestoring === false) {
+        subscribe()
+      }
+    },
+    { immediate: true },
+  )
 
   const updater = () => {
     observer.setOptions(defaultedOptions.value)
@@ -165,25 +183,26 @@ export function useBaseQuery<
         }
         const run = () => {
           if (defaultedOptions.value.enabled !== false) {
+            const boundObserver = observer
             // fix #6133
-            observer.setOptions(defaultedOptions.value)
-            const optimisticResult = observer.getOptimisticResult(
+            boundObserver.setOptions(defaultedOptions.value)
+            const optimisticResult = boundObserver.getOptimisticResult(
               defaultedOptions.value,
             )
             if (optimisticResult.isStale) {
               stopWatch()
-              observer
+              boundObserver
                 .fetchOptimistic(defaultedOptions.value)
                 .then(resolve, (error: TError) => {
                   if (
                     shouldThrowError(defaultedOptions.value.throwOnError, [
                       error,
-                      observer.getCurrentQuery(),
+                      boundObserver.getCurrentQuery(),
                     ])
                   ) {
                     reject(error)
                   } else {
-                    resolve(observer.getCurrentResult())
+                    resolve(boundObserver.getCurrentResult())
                   }
                 })
             } else {
@@ -225,7 +244,8 @@ export function useBaseQuery<
   const object: any = toRefs(readonlyState)
   for (const key in state) {
     if (typeof state[key as keyof typeof state] === 'function') {
-      object[key] = state[key as keyof typeof state]
+      // `state` is refilled from a new observer when the client changes.
+      object[key] = (...args: Array<unknown>) => (state as any)[key](...args)
     }
   }
 
