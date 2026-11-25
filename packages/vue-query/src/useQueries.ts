@@ -1,4 +1,4 @@
-import { QueriesObserver } from '@tanstack/query-core'
+import { QueriesObserver, noop } from '@tanstack/query-core'
 import {
   computed,
   getCurrentScope,
@@ -10,7 +10,7 @@ import {
   watch,
 } from 'vue-demi'
 
-import { useQueryClient } from './useQueryClient'
+import { useQueryClientGetter } from './useQueryClient'
 import { cloneDeepUnref } from './utils'
 import type { Ref } from 'vue-demi'
 import type {
@@ -382,9 +382,14 @@ export function useQueries<
     }
   }
 
-  const client = queryClient || useQueryClient()
+  const getClient = queryClient ? () => queryClient : useQueryClientGetter()
+  // Bumped to resolve the client again when it may have changed without an options change.
+  const clientCheck = shallowRef(0)
 
-  const defaultedQueries = computed(() => {
+  const boundQueries = computed(() => {
+    void clientCheck.value
+    const client = getClient()
+
     const resolvedQueries =
       typeof queries === 'function'
         ? (queries as () => MaybeRefDeep<UseQueriesOptionsArg<T>>)()
@@ -393,7 +398,7 @@ export function useQueries<
     const queriesRaw = unref(resolvedQueries) as ReadonlyArray<any>
 
     // Unref the rest for each element in the top level array.
-    return queriesRaw.map((queryOptions) => {
+    const defaultedList = queriesRaw.map((queryOptions) => {
       const clonedOptions = cloneDeepUnref(queryOptions)
 
       if (typeof clonedOptions.enabled === 'function') {
@@ -407,13 +412,25 @@ export function useQueries<
 
       return defaulted
     })
-  })
 
-  const observer = new QueriesObserver<TCombinedResult>(
+    return { client, queries: defaultedList }
+  })
+  const defaultedQueries = computed(() => boundQueries.value.queries)
+
+  let client = boundQueries.value.client
+  let observer = new QueriesObserver<TCombinedResult>(
     client,
     defaultedQueries.value,
     options as QueriesObserverOptions<TCombinedResult>,
   )
+
+  const invalidateClient = () => {
+    if (getClient() === client) {
+      return false
+    }
+    clientCheck.value++
+    return true
+  }
 
   const getOptimisticResult = () => {
     const [results, getCombinedResult] = observer.getOptimisticResult(
@@ -426,6 +443,9 @@ export function useQueries<
         return {
           ...result,
           refetch: async (...args: Array<any>) => {
+            if (invalidateClient()) {
+              syncObserver()
+            }
             const [{ [index]: query }] = observer.getOptimisticResult(
               defaultedQueries.value,
               (options as QueriesObserverOptions<TCombinedResult>).combine,
@@ -440,37 +460,58 @@ export function useQueries<
 
   const state = shallowRef(getOptimisticResult())
 
-  let unsubscribe = () => {
-    // noop
-  }
+  let unsubscribe: () => void = noop
+  let stopRestoringWatch: () => void = noop
 
-  if (client.isRestoring) {
-    watch(
-      client.isRestoring,
-      (isRestoring) => {
-        if (!isRestoring) {
-          unsubscribe()
-          unsubscribe = observer.subscribe(() => {
+  const subscribe = () => {
+    if (client.isRestoring) {
+      stopRestoringWatch = watch(
+        client.isRestoring,
+        (isRestoring) => {
+          if (!isRestoring) {
+            unsubscribe()
+            unsubscribe = observer.subscribe(() => {
+              state.value = getOptimisticResult()
+            })
+
             state.value = getOptimisticResult()
-          })
-
-          state.value = getOptimisticResult()
-        }
-      },
-      { immediate: true },
-    )
+          }
+        },
+        { immediate: true },
+      )
+    }
   }
 
-  watch(defaultedQueries, (queriesValue) => {
-    observer.setQueries(
-      queriesValue,
-      options as QueriesObserverOptions<TCombinedResult>,
-    )
+  subscribe()
+
+  const syncObserver = () => {
+    const bound = boundQueries.value
+    if (bound.client === client) {
+      observer.setQueries(
+        bound.queries,
+        options as QueriesObserverOptions<TCombinedResult>,
+      )
+    } else {
+      unsubscribe()
+      unsubscribe = noop
+      stopRestoringWatch()
+      stopRestoringWatch = noop
+      client = bound.client
+      observer = new QueriesObserver<TCombinedResult>(
+        client,
+        bound.queries,
+        options as QueriesObserverOptions<TCombinedResult>,
+      )
+      subscribe()
+    }
     state.value = getOptimisticResult()
-  })
+  }
+
+  watch(defaultedQueries, syncObserver)
 
   onScopeDispose(() => {
     unsubscribe()
+    stopRestoringWatch()
   })
 
   return options.shallow

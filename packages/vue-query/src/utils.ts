@@ -4,6 +4,9 @@ import type { MaybeRefDeep } from './types'
 /** @internal Base Vue injection key `VueQueryPlugin` provides the `QueryClient` under. */
 export const VUE_QUERY_CLIENT = 'VUE_QUERY_CLIENT'
 
+/** @internal Injection key `VueQueryPlugin` provides its Vue 3 app under, so composables can read the app's provides later. */
+export const VUE_QUERY_APP = 'VUE_QUERY_APP'
+
 /** @internal Builds the injection key `useQueryClient`/`VueQueryPlugin` use for a given `queryClientKey`. */
 export function getClientKey(key?: string) {
   const suffix = key ? `:${key}` : ''
