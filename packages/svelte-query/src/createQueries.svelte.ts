@@ -1,7 +1,7 @@
 import { QueriesObserver } from '@tanstack/query-core'
 import { useIsRestoring } from './useIsRestoring.js'
 import { createRawRef } from './containers.svelte.js'
-import { useQueryClient } from './useQueryClient.js'
+import { useQueryClientAccessor } from './useQueryClient.js'
 import type {
   Accessor,
   CreateQueryOptions,
@@ -273,7 +273,8 @@ export function createQueries<
   }>,
   queryClient?: Accessor<QueryClient>,
 ): TCombinedResult {
-  const client = $derived(useQueryClient(queryClient?.()))
+  const getClient = useQueryClientAccessor(queryClient)
+  const client = $derived(getClient())
   const isRestoring = useIsRestoring()
 
   const { queries, combine } = $derived.by(createQueriesOptions)

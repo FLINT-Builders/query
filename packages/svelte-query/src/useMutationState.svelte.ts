@@ -1,12 +1,17 @@
+import { untrack } from 'svelte'
 import { replaceEqualDeep } from '@tanstack/query-core'
-import { useQueryClient } from './useQueryClient.js'
+import { useQueryClientAccessor } from './useQueryClient.js'
 import type {
   Mutation,
   MutationCache,
   MutationState,
   QueryClient,
 } from '@tanstack/query-core'
-import type { MutationStateOptions, MutationTypeFromResult } from './types.js'
+import type {
+  Accessor,
+  MutationStateOptions,
+  MutationTypeFromResult,
+} from './types.js'
 
 function getResult<
   TResult = MutationState,
@@ -31,9 +36,9 @@ function getResult<
  * were created by a different component or hook instance, or even ones no longer mounted.
  *
  * @param options - The `filters` to narrow down matched mutations, and an optional `select` to transform the
- * mutation state.
- * @param queryClient - Use this to use a custom `QueryClient`. Otherwise, the one from the nearest context will
- * be used.
+ * mutation state. Pass a function returning them to re-filter when they change.
+ * @param queryClient - Use this to use a custom `QueryClient`, or pass a function returning it to follow a
+ * client that changes. Otherwise, the one from the nearest context will be used.
  * @returns An Array of whatever `select` returns for each matching mutation.
  *
  * @example
@@ -101,37 +106,34 @@ export function useMutationState<
   TMutation extends Mutation<any, any, any, any> =
     MutationTypeFromResult<TResult>,
 >(
-  options: MutationStateOptions<TResult, TMutation> = {},
-  queryClient?: QueryClient,
+  options:
+    | MutationStateOptions<TResult, TMutation>
+    | Accessor<MutationStateOptions<TResult, TMutation>> = {},
+  queryClient?: QueryClient | Accessor<QueryClient>,
 ): Array<TResult> {
-  const mutationCache = useQueryClient(queryClient).getMutationCache()
-  const result = $state(getResult(mutationCache, options))
+  const getClient = useQueryClientAccessor(queryClient)
+  const getOptions = typeof options === 'function' ? options : () => options
+  const mutationCache = $derived(getClient().getMutationCache())
+  // svelte-ignore state_referenced_locally - intentional, initial value
+  const result = $state(getResult(mutationCache, getOptions()))
 
-  $effect(() => {
-    const unsubscribe = mutationCache.subscribe(() => {
-      const nextResult = replaceEqualDeep(
-        result,
-        getResult(mutationCache, options),
-      )
-      if (result !== nextResult) {
-        result.splice(0, result.length, ...nextResult)
-      }
-    })
+  function setResult(nextResult: Array<TResult>) {
+    const merged = replaceEqualDeep(result, nextResult)
+    if (result !== merged) {
+      result.splice(0, result.length, ...merged)
+    }
+  }
 
-    return unsubscribe
+  // Re-runs whenever the client or the options change, so the previous cache's snapshot is replaced
+  // straight away rather than on that cache's next event, which may never come.
+  $effect.pre(() => {
+    const cache = mutationCache
+    const opts = getOptions()
+    const nextResult = getResult(cache, opts)
+    untrack(() => setResult(nextResult))
+
+    return cache.subscribe(() => setResult(getResult(cache, opts)))
   })
 
-  /*  $effect(() => {
-    mutationCache.subscribe(() => {
-      const nextResult = replaceEqualDeep(
-        result.current,
-        getResult(mutationCache, optionsRef),
-      )
-      if (result.current !== nextResult) {
-        result = nextResult
-        //notifyManager.schedule(onStoreChange)
-      }
-    })
-  }) */
   return result
 }

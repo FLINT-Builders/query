@@ -1,5 +1,9 @@
-import { getQueryClientContext } from './context.js'
+import {
+  getQueryClientContext,
+  getQueryClientContextAccessor,
+} from './context.js'
 import type { QueryClient } from '@tanstack/query-core'
+import type { Accessor } from './types.js'
 
 /**
  * The `useQueryClient` function returns the current `QueryClient` instance.
@@ -24,4 +28,24 @@ import type { QueryClient } from '@tanstack/query-core'
 export function useQueryClient(queryClient?: QueryClient): QueryClient {
   if (queryClient) return queryClient
   return getQueryClientContext()
+}
+
+/**
+ * Like {@link useQueryClient}, but returns a function that resolves the client on every call, so reactive
+ * readers follow a `queryClient` accessor or a `QueryClientProvider` whose client changes.
+ *
+ * Must be called during component initialization unless `queryClient` always resolves to a client.
+ *
+ * @internal
+ */
+export function useQueryClientAccessor(
+  queryClient?: QueryClient | Accessor<QueryClient | undefined>,
+): Accessor<QueryClient> {
+  if (typeof queryClient !== 'function') {
+    if (queryClient) return () => queryClient
+    return getQueryClientContextAccessor()
+  }
+  let fromContext = queryClient() ? undefined : getQueryClientContextAccessor()
+  return () =>
+    queryClient() ?? (fromContext ??= getQueryClientContextAccessor())()
 }
