@@ -1,5 +1,11 @@
-import { getCurrentScope, onScopeDispose, ref, watchEffect } from 'vue-demi'
-import { useQueryClient } from './useQueryClient'
+import {
+  getCurrentScope,
+  onScopeDispose,
+  ref,
+  watch,
+  watchEffect,
+} from 'vue-demi'
+import { useQueryClientRef } from './useQueryClientRef'
 import { cloneDeepUnref } from './utils'
 import type { Ref } from 'vue-demi'
 import type { QueryFilters } from '@tanstack/query-core'
@@ -63,21 +69,34 @@ export function useIsFetching(
     }
   }
 
-  const client = queryClient || useQueryClient()
+  const client = useQueryClientRef(queryClient)
 
   const isFetching = ref()
 
-  const listener = () => {
+  const update = (boundClient: QueryClient) => {
     const resolvedFilters =
       typeof fetchingFilters === 'function'
         ? fetchingFilters()
         : fetchingFilters
-    isFetching.value = client.isFetching(cloneDeepUnref(resolvedFilters))
+    isFetching.value = boundClient.isFetching(cloneDeepUnref(resolvedFilters))
   }
 
-  const unsubscribe = client.getQueryCache().subscribe(listener)
+  const subscribe = (boundClient: QueryClient) =>
+    boundClient.getQueryCache().subscribe(() => update(boundClient))
 
-  watchEffect(listener)
+  let unsubscribe = subscribe(client.value)
+
+  watch(
+    client,
+    (newClient) => {
+      unsubscribe()
+      unsubscribe = subscribe(newClient)
+      update(newClient)
+    },
+    { flush: 'sync' },
+  )
+
+  watchEffect(() => update(client.value))
 
   onScopeDispose(() => {
     unsubscribe()

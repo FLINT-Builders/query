@@ -10,7 +10,7 @@ import {
   watch,
 } from 'vue-demi'
 
-import { useQueryClient } from './useQueryClient'
+import { useQueryClientRef } from './useQueryClientRef'
 import { cloneDeepUnref } from './utils'
 import type { Ref } from 'vue-demi'
 import type {
@@ -382,7 +382,7 @@ export function useQueries<
     }
   }
 
-  const client = queryClient || useQueryClient()
+  const client = useQueryClientRef(queryClient)
 
   const defaultedQueries = computed(() => {
     const resolvedQueries =
@@ -400,8 +400,8 @@ export function useQueries<
         clonedOptions.enabled = queryOptions.enabled()
       }
 
-      const defaulted = client.defaultQueryOptions(clonedOptions)
-      defaulted._optimisticResults = client.isRestoring?.value
+      const defaulted = client.value.defaultQueryOptions(clonedOptions)
+      defaulted._optimisticResults = client.value.isRestoring?.value
         ? 'isRestoring'
         : 'optimistic'
 
@@ -409,8 +409,8 @@ export function useQueries<
     })
   })
 
-  const observer = new QueriesObserver<TCombinedResult>(
-    client,
+  let observer = new QueriesObserver<TCombinedResult>(
+    client.value,
     defaultedQueries.value,
     options as QueriesObserverOptions<TCombinedResult>,
   )
@@ -444,22 +444,43 @@ export function useQueries<
     // noop
   }
 
-  if (client.isRestoring) {
-    watch(
-      client.isRestoring,
-      (isRestoring) => {
-        if (!isRestoring) {
-          unsubscribe()
-          unsubscribe = observer.subscribe(() => {
-            state.value = getOptimisticResult()
-          })
-
-          state.value = getOptimisticResult()
-        }
-      },
-      { immediate: true },
-    )
+  const subscribe = () => {
+    unsubscribe()
+    unsubscribe = observer.subscribe(() => {
+      state.value = getOptimisticResult()
+    })
   }
+
+  watch(
+    client,
+    (newClient) => {
+      unsubscribe()
+      unsubscribe = () => {
+        // noop
+      }
+      observer = new QueriesObserver<TCombinedResult>(
+        newClient,
+        defaultedQueries.value,
+        options as QueriesObserverOptions<TCombinedResult>,
+      )
+      if (newClient.isRestoring?.value === false) {
+        subscribe()
+      }
+      state.value = getOptimisticResult()
+    },
+    { flush: 'sync' },
+  )
+
+  watch(
+    () => client.value.isRestoring?.value,
+    (isRestoring) => {
+      if (isRestoring === false) {
+        subscribe()
+        state.value = getOptimisticResult()
+      }
+    },
+    { immediate: true },
+  )
 
   watch(defaultedQueries, (queriesValue) => {
     observer.setQueries(
