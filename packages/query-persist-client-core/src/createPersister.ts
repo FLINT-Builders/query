@@ -78,6 +78,21 @@ export interface StoragePersisterOptions<TStorageValue = string> {
 
 export const PERSISTER_KEY_PREFIX = 'tanstack-query'
 
+interface StorageKeyState {
+  /** Generation of the most recent save or removal requested for this key. */
+  generation: number
+  /** Generation of the most recent removal requested for this key. */
+  removedAt: number
+  /** Number of operations that still need this state to stay tracked. */
+  holds: number
+  /** Settles once every storage call issued for this key has settled. */
+  tail: Promise<void>
+  queryKey?: QueryKey
+  queryHash?: string
+}
+
+const noop = () => {}
+
 /**
  * Warning: experimental feature.
  * This utility function enables fine-grained query persistence.
@@ -107,6 +122,101 @@ export function experimental_createQueryPersister<TStorageValue = string>({
   refetchOnRestore = true,
   filters,
 }: StoragePersisterOptions<TStorageValue>) {
+  // Storage calls for one key are issued one at a time, in the order they were
+  // requested, and each is skipped if a newer save or removal was requested
+  // for that key in the meantime. AsyncStorage does not promise that
+  // overlapping writes settle in order, so without this an older snapshot can
+  // land after a newer save or a removal.
+  const keyStates = new Map<string, StorageKeyState>()
+  let lastGeneration = 0
+  // While a read or scan of storage is running, idle key states are kept so
+  // that a save which starts and finishes during it is still visible as newer.
+  let activeReads = 0
+
+  function holdKey(storageKey: string) {
+    let state = keyStates.get(storageKey)
+    if (!state) {
+      state = { generation: 0, removedAt: 0, holds: 0, tail: Promise.resolve() }
+      keyStates.set(storageKey, state)
+    }
+    state.holds++
+    return state
+  }
+
+  function releaseKey(storageKey: string, state: StorageKeyState) {
+    state.holds--
+    if (
+      state.holds === 0 &&
+      activeReads === 0 &&
+      keyStates.get(storageKey) === state
+    ) {
+      keyStates.delete(storageKey)
+    }
+  }
+
+  function runInOrder(
+    state: StorageKeyState,
+    operation: () => MaybePromise<unknown>,
+  ): Promise<void> {
+    const run = state.tail.then(operation).then(noop)
+    state.tail = run.catch(noop)
+    return run
+  }
+
+  function startRead() {
+    activeReads++
+    const since = lastGeneration
+    const busy = new Set<string>()
+    keyStates.forEach((state, key) => {
+      if (state.holds > 0) busy.add(key)
+    })
+    return {
+      since,
+      /** Whether no save or removal for the key was pending at, or requested since, the start of the read. */
+      isCurrent: (storageKey: string) =>
+        !busy.has(storageKey) &&
+        (keyStates.get(storageKey)?.generation ?? 0) <= since,
+    }
+  }
+
+  function endRead() {
+    activeReads--
+    if (activeReads === 0) {
+      keyStates.forEach((state, key) => {
+        if (state.holds === 0) keyStates.delete(key)
+      })
+    }
+  }
+
+  /** Removes an entry that was read as unusable, unless the key changed since the read. */
+  async function discardEntry(storageKey: string, since: number) {
+    const state = holdKey(storageKey)
+    try {
+      await runInOrder(state, () =>
+        state.generation <= since ? storage!.removeItem(storageKey) : undefined,
+      )
+    } finally {
+      releaseKey(storageKey, state)
+    }
+  }
+
+  async function removeEntry(storageKey: string, generation: number) {
+    const state = holdKey(storageKey)
+    if (state.generation < generation) {
+      state.generation = generation
+      state.removedAt = generation
+    }
+    try {
+      await runInOrder(state, () =>
+        state.generation === generation
+          ? storage!.removeItem(storageKey)
+          : undefined,
+      )
+    } finally {
+      releaseKey(storageKey, state)
+    }
+  }
+
   function isExpiredOrBusted(persistedQuery: PersistedQuery) {
     if (persistedQuery.state.dataUpdatedAt) {
       const queryAge = Date.now() - persistedQuery.state.dataUpdatedAt
@@ -129,6 +239,7 @@ export function experimental_createQueryPersister<TStorageValue = string>({
   ) {
     if (storage != null) {
       const storageKey = `${prefix}-${queryHash}`
+      const read = startRead()
       try {
         const storedData = await storage.getItem(storageKey)
         if (storedData != null) {
@@ -136,12 +247,20 @@ export function experimental_createQueryPersister<TStorageValue = string>({
           try {
             persistedQuery = await deserialize(storedData)
           } catch {
-            await storage.removeItem(storageKey)
+            if (read.isCurrent(storageKey)) {
+              await discardEntry(storageKey, read.since)
+            }
+            return
+          }
+
+          if (!read.isCurrent(storageKey)) {
+            // A save or removal for this key overlapped the read, so the
+            // stored value may be one that has since been replaced or removed.
             return
           }
 
           if (isExpiredOrBusted(persistedQuery)) {
-            await storage.removeItem(storageKey)
+            await discardEntry(storageKey, read.since)
           } else {
             if (afterRestoreMacroTask) {
               // Just after restoring we want to get fresh data from the server if it's stale
@@ -160,7 +279,11 @@ export function experimental_createQueryPersister<TStorageValue = string>({
             'Encountered an error attempting to restore query cache from persisted location.',
           )
         }
-        await storage.removeItem(storageKey)
+        if (read.isCurrent(storageKey)) {
+          await discardEntry(storageKey, read.since)
+        }
+      } finally {
+        endRead()
       }
     }
 
@@ -186,18 +309,34 @@ export function experimental_createQueryPersister<TStorageValue = string>({
     }
   }
 
+  function holdQueryKey(query: Query) {
+    const storageKey = `${prefix}-${query.queryHash}`
+    const state = holdKey(storageKey)
+    state.queryKey = query.queryKey
+    state.queryHash = query.queryHash
+    return { storageKey, state }
+  }
+
   async function persistQuery(query: Query) {
     if (storage != null) {
-      const storageKey = `${prefix}-${query.queryHash}`
-      storage.setItem(
-        storageKey,
-        await serialize({
+      const { storageKey, state } = holdQueryKey(query)
+      const generation = ++lastGeneration
+      state.generation = generation
+      try {
+        const value = await serialize({
           state: query.state,
           queryKey: query.queryKey,
           queryHash: query.queryHash,
           buster: buster,
-        }),
-      )
+        })
+        await runInOrder(state, () =>
+          state.generation === generation
+            ? storage.setItem(storageKey, value)
+            : undefined,
+        )
+      } finally {
+        releaseKey(storageKey, state)
+      }
     }
   }
 
@@ -237,9 +376,16 @@ export function experimental_createQueryPersister<TStorageValue = string>({
     const queryFnResult = await queryFn(ctx)
 
     if (matchesFilter && storage != null) {
+      // The save is requested now, so a removal requested before the timeout
+      // fires must still win over it.
+      const { storageKey, state } = holdQueryKey(query)
+      const requestedAt = lastGeneration
       // Persist if we have storage defined, we use timeout to get proper state to be persisted
       notifyManager.schedule(() => {
-        persistQuery(query)
+        if (state.removedAt <= requestedAt) {
+          persistQuery(query)
+        }
+        releaseKey(storageKey, state)
       })
     }
 
@@ -249,20 +395,25 @@ export function experimental_createQueryPersister<TStorageValue = string>({
   async function persisterGc() {
     if (storage?.entries) {
       const storageKeyPrefix = `${prefix}-`
-      const entries = await storage.entries()
-      for (const [key, value] of entries) {
-        if (key.startsWith(storageKeyPrefix)) {
-          let persistedQuery: PersistedQuery
-          try {
-            persistedQuery = await deserialize(value)
-          } catch {
-            await storage.removeItem(key)
-            continue
-          }
-          if (isExpiredOrBusted(persistedQuery)) {
-            await storage.removeItem(key)
+      const read = startRead()
+      try {
+        const entries = await storage.entries()
+        for (const [key, value] of entries) {
+          if (key.startsWith(storageKeyPrefix) && read.isCurrent(key)) {
+            let persistedQuery: PersistedQuery
+            try {
+              persistedQuery = await deserialize(value)
+            } catch {
+              await discardEntry(key, read.since)
+              continue
+            }
+            if (isExpiredOrBusted(persistedQuery)) {
+              await discardEntry(key, read.since)
+            }
           }
         }
+      } finally {
+        endRead()
       }
     } else if (process.env.NODE_ENV === 'development') {
       throw new Error(
@@ -279,39 +430,49 @@ export function experimental_createQueryPersister<TStorageValue = string>({
 
     if (storage?.entries) {
       const storageKeyPrefix = `${prefix}-`
-      const entries = await storage.entries()
-      for (const [key, value] of entries) {
-        if (key.startsWith(storageKeyPrefix)) {
-          let persistedQuery: PersistedQuery
-          try {
-            persistedQuery = await deserialize(value)
-          } catch {
-            await storage.removeItem(key)
-            continue
-          }
-          if (isExpiredOrBusted(persistedQuery)) {
-            await storage.removeItem(key)
-            continue
-          }
-
-          if (queryKey) {
-            if (exact) {
-              if (persistedQuery.queryHash !== hashKey(queryKey)) {
-                continue
+      const read = startRead()
+      try {
+        const entries = await storage.entries()
+        for (const [key, value] of entries) {
+          if (key.startsWith(storageKeyPrefix)) {
+            let persistedQuery: PersistedQuery
+            try {
+              persistedQuery = await deserialize(value)
+            } catch {
+              if (read.isCurrent(key)) {
+                await discardEntry(key, read.since)
               }
-            } else if (!partialMatchKey(persistedQuery.queryKey, queryKey)) {
               continue
             }
-          }
+            if (!read.isCurrent(key)) {
+              continue
+            }
+            if (isExpiredOrBusted(persistedQuery)) {
+              await discardEntry(key, read.since)
+              continue
+            }
 
-          queryClient.setQueryData(
-            persistedQuery.queryKey,
-            persistedQuery.state.data,
-            {
-              updatedAt: persistedQuery.state.dataUpdatedAt,
-            },
-          )
+            if (queryKey) {
+              if (exact) {
+                if (persistedQuery.queryHash !== hashKey(queryKey)) {
+                  continue
+                }
+              } else if (!partialMatchKey(persistedQuery.queryKey, queryKey)) {
+                continue
+              }
+            }
+
+            queryClient.setQueryData(
+              persistedQuery.queryKey,
+              persistedQuery.state.data,
+              {
+                updatedAt: persistedQuery.state.dataUpdatedAt,
+              },
+            )
+          }
         }
+      } finally {
+        endRead()
       }
     } else if (process.env.NODE_ENV === 'development') {
       throw new Error(
@@ -326,33 +487,63 @@ export function experimental_createQueryPersister<TStorageValue = string>({
     const { exact, queryKey } = filters
 
     if (storage?.entries) {
-      const entries = await storage.entries()
+      const generation = ++lastGeneration
       const storageKeyPrefix = `${prefix}-`
-      for (const [key, value] of entries) {
-        if (key.startsWith(storageKeyPrefix)) {
-          if (!queryKey) {
-            await storage.removeItem(key)
+      const matches = (persisted: { queryKey: QueryKey; queryHash: string }) =>
+        !queryKey ||
+        (exact
+          ? persisted.queryHash === hashKey(queryKey)
+          : partialMatchKey(persisted.queryKey, queryKey))
+      const removals = new Map<string, Promise<void>>()
+      const remove = (key: string) => {
+        if (!removals.has(key)) {
+          const removal = removeEntry(key, generation)
+          removal.catch(noop)
+          removals.set(key, removal)
+        }
+      }
+
+      activeReads++
+      try {
+        // Keys with a save in progress may not be in storage yet; the removal
+        // has to be ordered after those saves.
+        keyStates.forEach((state, key) => {
+          if (
+            !queryKey ||
+            (state.queryKey !== undefined &&
+              state.queryHash !== undefined &&
+              matches({ queryKey: state.queryKey, queryHash: state.queryHash }))
+          ) {
+            remove(key)
+          }
+        })
+
+        const entries = await storage.entries()
+        for (const [key, value] of entries) {
+          if (!key.startsWith(storageKeyPrefix) || removals.has(key)) {
             continue
           }
 
-          let persistedQuery: PersistedQuery
-          try {
-            persistedQuery = await deserialize(value)
-          } catch {
-            await storage.removeItem(key)
-            continue
-          }
-
-          if (exact) {
-            if (persistedQuery.queryHash !== hashKey(queryKey)) {
+          if (queryKey) {
+            let persistedQuery: PersistedQuery
+            try {
+              persistedQuery = await deserialize(value)
+            } catch {
+              remove(key)
               continue
             }
-          } else if (!partialMatchKey(persistedQuery.queryKey, queryKey)) {
-            continue
+
+            if (!matches(persistedQuery)) {
+              continue
+            }
           }
 
-          await storage.removeItem(key)
+          remove(key)
         }
+
+        await Promise.all(removals.values())
+      } finally {
+        endRead()
       }
     } else if (process.env.NODE_ENV === 'development') {
       throw new Error(
