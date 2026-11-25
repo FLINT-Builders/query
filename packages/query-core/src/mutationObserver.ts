@@ -141,10 +141,11 @@ export class MutationObserver<
   /** @internal */
   onMutationUpdate(
     action: Action<TData, TError, TVariables, TOnMutateResult>,
+    mutationRemoved = false,
   ): void {
     this.#updateResult()
 
-    this.#notify(action)
+    this.#notify(action, mutationRemoved)
   }
 
   /**
@@ -237,10 +238,14 @@ export class MutationObserver<
     } as MutationObserverResult<TData, TError, TVariables, TOnMutateResult>
   }
 
-  #notify(action?: Action<TData, TError, TVariables, TOnMutateResult>): void {
+  #notify(
+    action?: Action<TData, TError, TVariables, TOnMutateResult>,
+    mutationRemoved = false,
+  ): void {
     notifyManager.batch(() => {
-      // First trigger the mutate callbacks
-      if (this.#mutateOptions && this.hasListeners()) {
+      // First trigger the mutate callbacks, unless the mutation was removed
+      // from its cache (e.g. by `QueryClient.clear`) while it was in flight
+      if (this.#mutateOptions && this.hasListeners() && !mutationRemoved) {
         const variables = this.#currentResult.variables!
         const onMutateResult = this.#currentResult.context
 
